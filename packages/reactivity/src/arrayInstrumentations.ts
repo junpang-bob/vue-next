@@ -38,7 +38,7 @@ function toWrapped(target: unknown, item: unknown) {
   }
   return toReactive(item)
 }
-
+//重写了所有数组方法使得调用数组方法触发响应
 export const arrayInstrumentations: Record<string | symbol, Function> = <any>{
   __proto__: null,
 

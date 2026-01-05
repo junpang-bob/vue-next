@@ -45,25 +45,26 @@ function hasOwnProperty(this: object, key: unknown) {
   track(obj, TrackOpTypes.HAS, key)
   return obj.hasOwnProperty(key as string)
 }
-
+//重写ProxyHandler中的get方法
 class BaseReactiveHandler implements ProxyHandler<Target> {
   constructor(
     protected readonly _isReadonly = false,
     protected readonly _isShallow = false,
   ) {}
-
+  
   get(target: Target, key: string | symbol, receiver: object): any {
+    //跳过相应处理
     if (key === ReactiveFlags.SKIP) return target[ReactiveFlags.SKIP]
-
+    //判断对象的类型
     const isReadonly = this._isReadonly,
       isShallow = this._isShallow
-    if (key === ReactiveFlags.IS_REACTIVE) {
+    if (key === ReactiveFlags.IS_REACTIVE) {  //是否是响应式
       return !isReadonly
-    } else if (key === ReactiveFlags.IS_READONLY) {
+    } else if (key === ReactiveFlags.IS_READONLY) { //是否是只读
       return isReadonly
-    } else if (key === ReactiveFlags.IS_SHALLOW) {
+    } else if (key === ReactiveFlags.IS_SHALLOW) { //是否是浅响应
       return isShallow
-    } else if (key === ReactiveFlags.RAW) {
+    } else if (key === ReactiveFlags.RAW) { //是否是原始对象
       if (
         receiver ===
           (isReadonly
@@ -95,7 +96,7 @@ class BaseReactiveHandler implements ProxyHandler<Target> {
         return hasOwnProperty
       }
     }
-
+    //key的取值与上述情况均无关后调用Reflect.get方法获取目标对象的值
     const res = Reflect.get(
       target,
       key,
@@ -104,32 +105,32 @@ class BaseReactiveHandler implements ProxyHandler<Target> {
       // its class methods
       isRef(target) ? target : receiver,
     )
-
+    //判断key是否是内置符号或不可追踪的key
     if (isSymbol(key) ? builtInSymbols.has(key) : isNonTrackableKeys(key)) {
       return res
     }
-
+    //如果对象不是只读的，则调用track方法追踪key的取值
     if (!isReadonly) {
       track(target, TrackOpTypes.GET, key)
     }
-
+    //如果对象是浅响应的，则返回目标对象的值
     if (isShallow) {
       return res
     }
-
+    //如果对象是引用类型，则返回目标对象的值
     if (isRef(res)) {
       // ref unwrapping - skip unwrap for Array + integer key.
       const value = targetIsArray && isIntegerKey(key) ? res : res.value
       return isReadonly && isObject(value) ? readonly(value) : value
     }
-
+    //如果对象是对象类型，则返回目标对象的值
     if (isObject(res)) {
       // Convert returned value into a proxy as well. we do the isObject check
       // here to avoid invalid value warning. Also need to lazy access readonly
       // and reactive here to avoid circular dependency.
       return isReadonly ? readonly(res) : reactive(res)
     }
-
+    //返回目标对象的值
     return res
   }
 }
@@ -147,9 +148,11 @@ class MutableReactiveHandler extends BaseReactiveHandler {
   ): boolean {
     let oldValue = target[key]
     const isArrayWithIntegerKey = isArray(target) && isIntegerKey(key)
+
     if (!this._isShallow) {
       const isOldValueReadonly = isReadonly(oldValue)
       if (!isShallow(value) && !isReadonly(value)) {
+        //将旧值和新值转换为原始对象
         oldValue = toRaw(oldValue)
         value = toRaw(value)
       }
@@ -174,6 +177,7 @@ class MutableReactiveHandler extends BaseReactiveHandler {
     const hadKey = isArrayWithIntegerKey
       ? Number(key) < target.length
       : hasOwn(target, key)
+    //调用Reflect.set方法设置目标对象的值
     const result = Reflect.set(
       target,
       key,
@@ -181,10 +185,13 @@ class MutableReactiveHandler extends BaseReactiveHandler {
       isRef(target) ? target : receiver,
     )
     // don't trigger if target is something up in the prototype chain of original
+    //如果目标对象是原始对象，则触发响应
     if (target === toRaw(receiver)) {
       if (!hadKey) {
+        //解决数组新增元素时触发响应
         trigger(target, TriggerOpTypes.ADD, key, value)
       } else if (hasChanged(value, oldValue)) {
+        //解决数组修改元素时触发响应
         trigger(target, TriggerOpTypes.SET, key, value, oldValue)
       }
     }

@@ -253,7 +253,7 @@ export function shallowReadonly<T extends object>(target: T): Readonly<T> {
     shallowReadonlyMap,
   )
 }
-
+//创建响应式对象
 function createReactiveObject(
   target: Target,
   isReadonly: boolean,

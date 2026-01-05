@@ -15,10 +15,10 @@ export enum TriggerOpTypes {
 }
 
 export enum ReactiveFlags {
-  SKIP = '__v_skip',
-  IS_REACTIVE = '__v_isReactive',
-  IS_READONLY = '__v_isReadonly',
-  IS_SHALLOW = '__v_isShallow',
-  RAW = '__v_raw',
+  SKIP = '__v_skip',//是否跳过
+  IS_REACTIVE = '__v_isReactive',//是否是相应式
+  IS_READONLY = '__v_isReadonly',//是否只读
+  IS_SHALLOW = '__v_isShallow',//是否是浅响应
+  RAW = '__v_raw',//是否是源文件
   IS_REF = '__v_isRef',
 }
