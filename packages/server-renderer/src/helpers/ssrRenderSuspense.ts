@@ -1,13 +1,11 @@
-import { PushFn } from '../renderToString'
+import type { PushFn } from '../render'
 
 export async function ssrRenderSuspense(
   push: PushFn,
-  { default: renderContent }: Record<string, (() => void) | undefined>
-) {
+  { default: renderContent }: Record<string, (() => void) | undefined>,
+): Promise<void> {
   if (renderContent) {
-    push(`<!--[-->`)
     renderContent()
-    push(`<!--]-->`)
   } else {
     push(`<!---->`)
   }

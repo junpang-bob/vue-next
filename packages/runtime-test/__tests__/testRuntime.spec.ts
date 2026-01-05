@@ -1,53 +1,50 @@
 import {
-  h,
-  render,
-  nodeOps,
-  NodeTypes,
-  TestElement,
-  TestText,
-  ref,
-  reactive,
-  dumpOps,
-  resetOps,
   NodeOpTypes,
+  type TestElement,
+  TestNodeTypes,
+  type TestText,
+  dumpOps,
+  h,
   nextTick,
+  nodeOps,
+  reactive,
+  ref,
+  render,
+  resetOps,
   serialize,
-  triggerEvent
+  triggerEvent,
 } from '../src'
-import { mockWarn } from '@vue/shared'
 
 describe('test renderer', () => {
-  mockWarn()
-
   it('should work', () => {
     const root = nodeOps.createElement('div')
     render(
       h(
         'div',
         {
-          id: 'test'
+          id: 'test',
         },
-        'hello'
+        'hello',
       ),
-      root
+      root,
     )
 
     expect(root.children.length).toBe(1)
 
     const el = root.children[0] as TestElement
-    expect(el.type).toBe(NodeTypes.ELEMENT)
+    expect(el.type).toBe(TestNodeTypes.ELEMENT)
     expect(el.props.id).toBe('test')
     expect(el.children.length).toBe(1)
 
     const text = el.children[0] as TestText
-    expect(text.type).toBe(NodeTypes.TEXT)
+    expect(text.type).toBe(TestNodeTypes.TEXT)
     expect(text.text).toBe('hello')
   })
 
   it('should record ops', async () => {
     const state = reactive({
       id: 'test',
-      text: 'hello'
+      text: 'hello',
     })
 
     const App = {
@@ -55,11 +52,11 @@ describe('test renderer', () => {
         return h(
           'div',
           {
-            id: state.id
+            id: state.id,
           },
-          state.text
+          state.text,
         )
-      }
+      },
     }
     const root = nodeOps.createElement('div')
 
@@ -71,30 +68,30 @@ describe('test renderer', () => {
 
     expect(ops[0]).toEqual({
       type: NodeOpTypes.CREATE,
-      nodeType: NodeTypes.ELEMENT,
+      nodeType: TestNodeTypes.ELEMENT,
       tag: 'div',
-      targetNode: root.children[0]
+      targetNode: root.children[0],
     })
 
     expect(ops[1]).toEqual({
+      type: NodeOpTypes.SET_ELEMENT_TEXT,
+      text: 'hello',
+      targetNode: root.children[0],
+    })
+
+    expect(ops[2]).toEqual({
       type: NodeOpTypes.PATCH,
       targetNode: root.children[0],
       propKey: 'id',
       propPrevValue: null,
-      propNextValue: 'test'
-    })
-
-    expect(ops[2]).toEqual({
-      type: NodeOpTypes.SET_ELEMENT_TEXT,
-      text: 'hello',
-      targetNode: root.children[0]
+      propNextValue: 'test',
     })
 
     expect(ops[3]).toEqual({
       type: NodeOpTypes.INSERT,
       targetNode: root.children[0],
       parentNode: root,
-      refNode: null
+      refNode: null,
     })
 
     // test update ops
@@ -106,17 +103,17 @@ describe('test renderer', () => {
     expect(updateOps.length).toBe(2)
 
     expect(updateOps[0]).toEqual({
+      type: NodeOpTypes.SET_ELEMENT_TEXT,
+      targetNode: root.children[0],
+      text: 'bar',
+    })
+
+    expect(updateOps[1]).toEqual({
       type: NodeOpTypes.PATCH,
       targetNode: root.children[0],
       propKey: 'id',
       propPrevValue: 'test',
-      propNextValue: 'foo'
-    })
-
-    expect(updateOps[1]).toEqual({
-      type: NodeOpTypes.SET_ELEMENT_TEXT,
-      targetNode: root.children[0],
-      text: 'bar'
+      propNextValue: 'foo',
     })
   })
 
@@ -127,16 +124,16 @@ describe('test renderer', () => {
           'div',
           {
             id: 'test',
-            boolean: ''
+            boolean: '',
           },
-          [h('span', 'foo'), 'hello']
+          [h('span', 'foo'), 'hello'],
         )
-      }
+      },
     }
     const root = nodeOps.createElement('div')
     render(h(App), root)
     expect(serialize(root)).toEqual(
-      `<div><div id="test" boolean><span>foo</span>hello</div></div>`
+      `<div><div id="test" boolean><span>foo</span>hello</div></div>`,
     )
     // indented output
     expect(serialize(root, 2)).toEqual(
@@ -147,7 +144,7 @@ describe('test renderer', () => {
     </span>
     hello
   </div>
-</div>`
+</div>`,
     )
   })
 
@@ -160,9 +157,9 @@ describe('test renderer', () => {
         {
           onClick: () => {
             count.value++
-          }
+          },
         },
-        count.value
+        count.value,
       )
     }
 
@@ -188,10 +185,10 @@ describe('test renderer', () => {
             },
             () => {
               count2.value++
-            }
-          ]
+            },
+          ],
         },
-        `${count.value}, ${count2.value}`
+        `${count.value}, ${count2.value}`,
       )
     }
 
@@ -202,18 +199,5 @@ describe('test renderer', () => {
     expect(count2.value).toBe(2)
     await nextTick()
     expect(serialize(root)).toBe(`<div><span>1, 2</span></div>`)
-  })
-
-  it('should mock warn', () => {
-    console.warn('warn!!!')
-    expect('warn!!!').toHaveBeenWarned()
-    expect('warn!!!').toHaveBeenWarnedTimes(1)
-
-    console.warn('warn!!!')
-    expect('warn!!!').toHaveBeenWarnedTimes(2)
-
-    console.warn('warning')
-    expect('warn!!!').toHaveBeenWarnedTimes(2)
-    expect('warning').toHaveBeenWarnedLast()
   })
 })

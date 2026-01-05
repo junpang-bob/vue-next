@@ -1,25 +1,19 @@
+import { initDirectivesForSSR } from 'vue'
+initDirectivesForSSR()
+
 // public
+export type { SSRContext } from './render'
 export { renderToString } from './renderToString'
+export {
+  renderToSimpleStream,
+  renderToNodeStream,
+  pipeToNodeWritable,
+  renderToWebStream,
+  pipeToWebWritable,
+  type SimpleReadable,
+  // deprecated
+  renderToStream,
+} from './renderToStream'
 
 // internal runtime helpers
-export { renderComponent as ssrRenderComponent } from './renderToString'
-export { ssrRenderSlot } from './helpers/ssrRenderSlot'
-export {
-  ssrRenderClass,
-  ssrRenderStyle,
-  ssrRenderAttrs,
-  ssrRenderAttr,
-  ssrRenderDynamicAttr
-} from './helpers/ssrRenderAttrs'
-export { ssrInterpolate } from './helpers/ssrInterpolate'
-export { ssrRenderList } from './helpers/ssrRenderList'
-export { ssrRenderTeleport } from './helpers/ssrRenderTeleport'
-export { ssrRenderSuspense } from './helpers/ssrRenderSuspense'
-
-// v-model helpers
-export {
-  ssrLooseEqual,
-  ssrLooseContain,
-  ssrRenderDynamicModel,
-  ssrGetDynamicModelProps
-} from './helpers/ssrVModelHelpers'
+export * from './internal'

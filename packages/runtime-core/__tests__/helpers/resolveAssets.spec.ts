@@ -1,22 +1,19 @@
 import {
+  Comment,
+  type Component,
+  type Directive,
+  type VNode,
   createApp,
+  createVNode,
+  h,
   nodeOps,
   resolveComponent,
   resolveDirective,
-  Component,
-  Directive,
   resolveDynamicComponent,
-  h,
   serializeInner,
-  createVNode,
-  Comment,
-  VNode
 } from '@vue/runtime-test'
-import { mockWarn } from '@vue/shared'
 
 describe('resolveAssets', () => {
-  mockWarn()
-
   test('should work', () => {
     const FooBar = () => null
     const BarBaz = { mounted: () => null }
@@ -32,10 +29,10 @@ describe('resolveAssets', () => {
 
     const Root = {
       components: {
-        FooBar: FooBar
+        FooBar: FooBar,
       },
       directives: {
-        BarBaz: BarBaz
+        BarBaz: BarBaz,
       },
       setup() {
         return () => {
@@ -51,7 +48,7 @@ describe('resolveAssets', () => {
           component4 = resolveComponent('foo-bar')!
           directive4 = resolveDirective('bar-baz')!
         }
-      }
+      },
     }
 
     const app = createApp(Root)
@@ -68,16 +65,47 @@ describe('resolveAssets', () => {
     expect(directive4!).toBe(BarBaz)
   })
 
+  test('maybeSelfReference', async () => {
+    let component1: Component | string
+    let component2: Component | string
+    let component3: Component | string
+
+    const Foo = () => null
+
+    const Root = {
+      name: 'Root',
+      components: {
+        Foo,
+        Root: Foo,
+      },
+      setup() {
+        return () => {
+          component1 = resolveComponent('Root', true)
+          component2 = resolveComponent('Foo', true)
+          component3 = resolveComponent('Bar', true)
+        }
+      },
+    }
+
+    const app = createApp(Root)
+    const root = nodeOps.createElement('div')
+    app.mount(root)
+
+    expect(component1!).toMatchObject(Root) // explicit self name reference
+    expect(component2!).toBe(Foo) // successful resolve take higher priority
+    expect(component3!).toMatchObject(Root) // fallback when resolve fails
+  })
+
   describe('warning', () => {
     test('used outside render() or setup()', () => {
       resolveComponent('foo')
       expect(
-        'resolveComponent can only be used in render() or setup().'
+        'resolveComponent can only be used in render() or setup().',
       ).toHaveBeenWarned()
 
       resolveDirective('foo')
       expect(
-        'resolveDirective can only be used in render() or setup().'
+        'resolveDirective can only be used in render() or setup().',
       ).toHaveBeenWarned()
     })
 
@@ -87,7 +115,7 @@ describe('resolveAssets', () => {
           resolveComponent('foo')
           resolveDirective('bar')
           return () => null
-        }
+        },
       }
 
       const app = createApp(Root)
@@ -101,7 +129,7 @@ describe('resolveAssets', () => {
       const dynamicComponents = {
         foo: () => 'foo',
         bar: () => 'bar',
-        baz: { render: () => 'baz' }
+        baz: { render: () => 'baz' },
       }
       let foo, bar, baz // dynamic components
       let dynamicVNode: VNode
@@ -109,7 +137,7 @@ describe('resolveAssets', () => {
       const Child = {
         render(this: any) {
           return this.$slots.default()
-        }
+        },
       }
 
       const Root = {
@@ -124,7 +152,7 @@ describe('resolveAssets', () => {
               baz = resolveDynamicComponent(dynamicComponents.baz) // <component :is="baz"/>, object
             })
           }
-        }
+        },
       }
 
       const app = createApp(Root)
@@ -142,10 +170,10 @@ describe('resolveAssets', () => {
         setup() {
           return () => {
             return createVNode(resolveDynamicComponent('div') as string, null, {
-              default: () => 'hello'
+              default: () => 'hello',
             })
           }
-        }
+        },
       }
 
       const app = createApp(Root)
@@ -153,5 +181,63 @@ describe('resolveAssets', () => {
       app.mount(root)
       expect(serializeInner(root)).toBe('<div>hello</div>')
     })
+  })
+
+  test('resolving from mixins & extends', () => {
+    const FooBar = () => null
+    const BarBaz = { mounted: () => null }
+
+    let component1: Component | string
+    let component2: Component | string
+    let component3: Component | string
+    let component4: Component | string
+    let directive1: Directive
+    let directive2: Directive
+    let directive3: Directive
+    let directive4: Directive
+
+    const Base = {
+      components: {
+        FooBar: FooBar,
+      },
+    }
+    const Mixin = {
+      directives: {
+        BarBaz: BarBaz,
+      },
+    }
+
+    const Root = {
+      extends: Base,
+      mixins: [Mixin],
+      setup() {
+        return () => {
+          component1 = resolveComponent('FooBar')!
+          directive1 = resolveDirective('BarBaz')!
+          // camelize
+          component2 = resolveComponent('Foo-bar')!
+          directive2 = resolveDirective('Bar-baz')!
+          // capitalize
+          component3 = resolveComponent('fooBar')!
+          directive3 = resolveDirective('barBaz')!
+          // camelize and capitalize
+          component4 = resolveComponent('foo-bar')!
+          directive4 = resolveDirective('bar-baz')!
+        }
+      },
+    }
+
+    const app = createApp(Root)
+    const root = nodeOps.createElement('div')
+    app.mount(root)
+    expect(component1!).toBe(FooBar)
+    expect(component2!).toBe(FooBar)
+    expect(component3!).toBe(FooBar)
+    expect(component4!).toBe(FooBar)
+
+    expect(directive1!).toBe(BarBaz)
+    expect(directive2!).toBe(BarBaz)
+    expect(directive3!).toBe(BarBaz)
+    expect(directive4!).toBe(BarBaz)
   })
 })

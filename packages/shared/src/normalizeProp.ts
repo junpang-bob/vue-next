@@ -1,13 +1,17 @@
-import { isArray, isString, isObject, hyphenate } from './'
-import { isNoUnitNumericStyleProp } from './domAttrConfig'
+import { hyphenate, isArray, isObject, isString } from './general'
+
+export type NormalizedStyle = Record<string, string | number>
 
 export function normalizeStyle(
-  value: unknown
-): Record<string, string | number> | undefined {
+  value: unknown,
+): NormalizedStyle | string | undefined {
   if (isArray(value)) {
-    const res: Record<string, string | number> = {}
+    const res: NormalizedStyle = {}
     for (let i = 0; i < value.length; i++) {
-      const normalized = normalizeStyle(value[i])
+      const item = value[i]
+      const normalized = isString(item)
+        ? parseStringStyle(item)
+        : (normalizeStyle(item) as NormalizedStyle)
       if (normalized) {
         for (const key in normalized) {
           res[key] = normalized[key]
@@ -15,25 +19,40 @@ export function normalizeStyle(
       }
     }
     return res
-  } else if (isObject(value)) {
+  } else if (isString(value) || isObject(value)) {
     return value
   }
 }
 
+const listDelimiterRE = /;(?![^(]*\))/g
+const propertyDelimiterRE = /:([^]+)/
+const styleCommentRE = /\/\*[^]*?\*\//g
+
+export function parseStringStyle(cssText: string): NormalizedStyle {
+  const ret: NormalizedStyle = {}
+  cssText
+    .replace(styleCommentRE, '')
+    .split(listDelimiterRE)
+    .forEach(item => {
+      if (item) {
+        const tmp = item.split(propertyDelimiterRE)
+        tmp.length > 1 && (ret[tmp[0].trim()] = tmp[1].trim())
+      }
+    })
+  return ret
+}
+
 export function stringifyStyle(
-  styles: Record<string, string | number> | undefined
+  styles: NormalizedStyle | string | undefined,
 ): string {
+  if (!styles) return ''
+  if (isString(styles)) return styles
+
   let ret = ''
-  if (!styles) {
-    return ret
-  }
   for (const key in styles) {
     const value = styles[key]
-    const normalizedKey = key.startsWith(`--`) ? key : hyphenate(key)
-    if (
-      isString(value) ||
-      (typeof value === 'number' && isNoUnitNumericStyleProp(normalizedKey))
-    ) {
+    if (isString(value) || typeof value === 'number') {
+      const normalizedKey = key.startsWith(`--`) ? key : hyphenate(key)
       // only render valid values
       ret += `${normalizedKey}:${value};`
     }
@@ -47,7 +66,10 @@ export function normalizeClass(value: unknown): string {
     res = value
   } else if (isArray(value)) {
     for (let i = 0; i < value.length; i++) {
-      res += normalizeClass(value[i]) + ' '
+      const normalized = normalizeClass(value[i])
+      if (normalized) {
+        res += normalized + ' '
+      }
     }
   } else if (isObject(value)) {
     for (const name in value) {
@@ -57,4 +79,18 @@ export function normalizeClass(value: unknown): string {
     }
   }
   return res.trim()
+}
+
+export function normalizeProps(
+  props: Record<string, any> | null,
+): Record<string, any> | null {
+  if (!props) return null
+  let { class: klass, style } = props
+  if (klass && !isString(klass)) {
+    props.class = normalizeClass(klass)
+  }
+  if (style) {
+    props.style = normalizeStyle(style)
+  }
+  return props
 }

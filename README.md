@@ -1,48 +1,56 @@
-# vue-next [![CircleCI](https://circleci.com/gh/vuejs/vue-next.svg?style=svg&circle-token=fb883a2d0a73df46e80b2e79fd430959d8f2b488)](https://circleci.com/gh/vuejs/vue-next)
+# vuejs/core [![npm](https://img.shields.io/npm/v/vue.svg)](https://www.npmjs.com/package/vue) [![build status](https://github.com/vuejs/core/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/vuejs/core/actions/workflows/ci.yml) [![Download](https://img.shields.io/npm/dm/vue)](https://www.npmjs.com/package/vue)
 
-## Status: Beta.
+## Getting Started
 
-- All planned RFCs have been merged.
+Please follow the documentation at [vuejs.org](https://vuejs.org/)!
 
-- All [merged RFCs](https://github.com/vuejs/rfcs/pulls?q=is%3Apr+is%3Amerged+label%3A3.x) have been implemented.
+## Sponsors
 
-- Vue CLI now has experimental support via [vue-cli-plugin-vue-next](https://github.com/vuejs/vue-cli-plugin-vue-next).
+Vue.js is an MIT-licensed open source project with its ongoing development made possible entirely by the support of these awesome [backers](https://github.com/vuejs/core/blob/main/BACKERS.md). If you'd like to join them, please consider [ sponsoring Vue's development](https://vuejs.org/sponsor/).
 
-- There is also a simple plain webpack-based setup with Single-File Component support available [here](https://github.com/vuejs/vue-next-webpack-preview).
+<p align="center">
+  <h3 align="center">Special Sponsor</h3>
+</p>
 
-Please note that there could still be undocumented behavior inconsistencies with 2.x. When you run into such a case, please make sure to first check if the behavior difference has already been proposed in an existing RFC. If the inconsistency is not part of an RFC, then it's likely unintended, and an issue should be opened (please make sure to use the [issue helper](https://new-issue.vuejs.org/?repo=vuejs/vue-next) when opening new issues).
+<p align="center">
+  <a target="_blank" href="https://github.com/appwrite/appwrite">
+  <img alt="special sponsor appwrite" src="https://sponsors.vuejs.org/images/appwrite.svg" width="300">
+  </a>
+</p>
 
-In addition, the current implementation requires native ES2015+ in the runtime environment and does not support IE11 (yet). The IE11 compatible build will be worked on after we have reached RC stage.
+<p align="center">
+  <a target="_blank" href="https://vuejs.org/sponsor/#current-sponsors">
+    <img alt="sponsors" src="https://sponsors.vuejs.org/sponsors.svg?v3">
+  </a>
+</p>
 
-## Official Libraries Vue 3 Support Status
+## Questions
 
-| Project | Status |
-|---------|--------|
-| vue-router          | Alpha [[Proposed RFCs][router-rfcs]] [[GitHub][router-code]] [[npm][router-npm]] |
-| vuex                | Beta, with same API [[GitHub][vuex-code]] [[npm][vuex-npm]] |
-| vue-class-component | Alpha [[Github][vcc-code]] [[npm][vcc-npm]] |
-| vue-cli             | Experimental support via [vue-cli-plugin-vue-next][cli] |
-| eslint-plugin-vue   | Alpha [[Github][epv-code]] [[npm][epv-npm]] |
-| vue-test-utils      | Alpha [[Github][vtu-code]] [[npm][vtu-npm]] |
-| vue-devtools        | WIP |
-| jsx                 | WIP |
+For questions and support please use [the official forum](https://forum.vuejs.org) or [community chat](https://chat.vuejs.org/). The issue list of this repo is **exclusively** for bug reports and feature requests.
 
-[router-code]: https://github.com/vuejs/vue-router-next
-[router-rfcs]: https://github.com/vuejs/rfcs/pulls?q=is%3Apr+is%3Aopen+label%3Arouter
-[router-npm]: https://unpkg.com/vue-router@next/
-[vuex-code]: https://github.com/vuejs/vuex/tree/4.0
-[vuex-npm]: https://unpkg.com/vuex@next/
-[cli]: https://github.com/vuejs/vue-cli-plugin-vue-next
-[vue-loader-code]: https://github.com/vuejs/vue-loader/tree/next
-[vue-loader-npm]: https://unpkg.com/vue-loader@next/
-[vcc-code]: https://github.com/vuejs/vue-class-component/tree/next
-[vcc-npm]: https://unpkg.com/vue-class-component@next/
-[vtu-code]: https://github.com/vuejs/vue-test-utils-next
-[vtu-npm]: https://www.npmjs.com/package/@vue/test-utils
-[epv-code]: https://github.com/vuejs/eslint-plugin-vue
-[epv-npm]: https://unpkg.com/browse/eslint-plugin-vue@7.0.0-alpha.0/
-[vue-devtools]:  https://github.com/vuejs/vue-devtools
+## Issues
+
+Please make sure to respect issue requirements and use [the new issue helper](https://new-issue.vuejs.org/) when opening an issue. Issues not conforming to the guidelines may be closed immediately.
+
+## Stay In Touch
+
+- [X](https://x.com/vuejs)
+- [Bluesky](https://bsky.app/profile/vuejs.org)
+- [Blog](https://blog.vuejs.org/)
+- [Job Board](https://vuejobs.com/?ref=vuejs)
 
 ## Contribution
 
-See [Contributing Guide](https://github.com/vuejs/vue-next/blob/master/.github/contributing.md).
+Please make sure to read the [Contributing Guide](https://github.com/vuejs/core/blob/main/.github/contributing.md) before making a pull request. If you have a Vue-related project/component/tool, add it with a pull request to [this curated list](https://github.com/vuejs/awesome-vue)!
+
+Thank you to all the people who already contributed to Vue!
+
+<a href="https://github.com/vuejs/core/graphs/contributors"><img src="https://opencollective.com/vuejs/contributors.svg?width=890&limit=500" /></a>
+
+<sub>_Note: Showing the first 500 contributors only due to GitHub image size limitations_</sub>
+
+## License
+
+[MIT](https://opensource.org/licenses/MIT)
+
+Copyright (c) 2013-present, Yuxi (Evan) You

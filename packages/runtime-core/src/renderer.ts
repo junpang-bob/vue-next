@@ -1,104 +1,129 @@
 import {
-  Text,
-  Fragment,
   Comment,
-  cloneIfMounted,
-  normalizeVNode,
-  VNode,
-  VNodeArrayChildren,
-  createVNode,
-  isSameVNodeType,
+  Fragment,
   Static,
-  VNodeNormalizedRef,
-  VNodeHook
+  Text,
+  type VNode,
+  type VNodeArrayChildren,
+  type VNodeHook,
+  type VNodeProps,
+  cloneIfMounted,
+  createVNode,
+  invokeVNodeHook,
+  isSameVNodeType,
+  normalizeVNode,
 } from './vnode'
 import {
-  ComponentInternalInstance,
+  type ComponentInternalInstance,
+  type ComponentOptions,
+  type Data,
+  type LifecycleHook,
   createComponentInstance,
-  Data,
-  setupComponent
+  setupComponent,
 } from './component'
 import {
+  filterSingleRoot,
   renderComponentRoot,
   shouldUpdateComponent,
-  updateHOCHostEl
+  updateHOCHostEl,
 } from './componentRenderUtils'
 import {
-  isString,
-  EMPTY_OBJ,
   EMPTY_ARR,
-  isReservedProp,
-  isFunction,
+  EMPTY_OBJ,
+  NOOP,
   PatchFlags,
   ShapeFlags,
-  NOOP,
-  hasOwn,
-  invokeArrayFns
+  def,
+  getGlobalThis,
+  invokeArrayFns,
+  isArray,
+  isReservedProp,
 } from '@vue/shared'
 import {
+  type SchedulerJob,
+  SchedulerJobFlags,
+  type SchedulerJobs,
+  flushPostFlushCbs,
+  flushPreFlushCbs,
   queueJob,
   queuePostFlushCb,
-  flushPostFlushCbs,
-  invalidateJob
 } from './scheduler'
-import { effect, stop, ReactiveEffectOptions, isRef } from '@vue/reactivity'
+import {
+  EffectFlags,
+  ReactiveEffect,
+  pauseTracking,
+  resetTracking,
+} from '@vue/reactivity'
 import { updateProps } from './componentProps'
 import { updateSlots } from './componentSlots'
-import { pushWarningContext, popWarningContext, warn } from './warning'
-import { ComponentPublicInstance } from './componentProxy'
-import { createAppAPI, CreateAppFunction } from './apiCreateApp'
+import { popWarningContext, pushWarningContext, warn } from './warning'
+import { type CreateAppFunction, createAppAPI } from './apiCreateApp'
+import { setRef } from './rendererTemplateRef'
 import {
-  SuspenseBoundary,
+  type SuspenseBoundary,
+  type SuspenseImpl,
+  isSuspense,
   queueEffectWithSuspense,
-  SuspenseImpl
 } from './components/Suspense'
-import { TeleportImpl } from './components/Teleport'
-import { isKeepAlive, KeepAliveContext } from './components/KeepAlive'
-import { registerHMR, unregisterHMR } from './hmr'
 import {
-  ErrorCodes,
-  callWithErrorHandling,
-  callWithAsyncErrorHandling
-} from './errorHandling'
-import { createHydrationFunctions, RootHydrateFunction } from './hydration'
+  TeleportEndKey,
+  type TeleportImpl,
+  type TeleportVNode,
+} from './components/Teleport'
+import { type KeepAliveContext, isKeepAlive } from './components/KeepAlive'
+import { isHmrUpdating, registerHMR, unregisterHMR } from './hmr'
+import { type RootHydrateFunction, createHydrationFunctions } from './hydration'
 import { invokeDirectiveHook } from './directives'
-import { startMeasure, endMeasure } from './profiling'
+import { endMeasure, startMeasure } from './profiling'
+import {
+  devtoolsComponentAdded,
+  devtoolsComponentRemoved,
+  devtoolsComponentUpdated,
+  setDevtoolsHook,
+} from './devtools'
+import { initFeatureFlags } from './featureFlags'
+import { isAsyncWrapper } from './apiAsyncComponent'
+import { isCompatEnabled } from './compat/compatConfig'
+import { DeprecationTypes } from './compat/compatConfig'
+import { type TransitionHooks, leaveCbKey } from './components/BaseTransition'
+import type { VueElement } from '@vue/runtime-dom'
 
-export interface Renderer<HostElement = any> {
+export interface Renderer<HostElement = RendererElement> {
   render: RootRenderFunction<HostElement>
   createApp: CreateAppFunction<HostElement>
 }
 
-export interface HydrationRenderer extends Renderer<Element> {
+export interface HydrationRenderer extends Renderer<Element | ShadowRoot> {
   hydrate: RootHydrateFunction
 }
 
+export type ElementNamespace = 'svg' | 'mathml' | undefined
+
 export type RootRenderFunction<HostElement = RendererElement> = (
   vnode: VNode | null,
-  container: HostElement
+  container: HostElement,
+  namespace?: ElementNamespace,
 ) => void
 
 export interface RendererOptions<
   HostNode = RendererNode,
-  HostElement = RendererElement
+  HostElement = RendererElement,
 > {
   patchProp(
     el: HostElement,
     key: string,
     prevValue: any,
     nextValue: any,
-    isSVG?: boolean,
-    prevChildren?: VNode<HostNode, HostElement>[],
+    namespace?: ElementNamespace,
     parentComponent?: ComponentInternalInstance | null,
-    parentSuspense?: SuspenseBoundary | null,
-    unmountChildren?: UnmountChildrenFn
   ): void
   insert(el: HostNode, parent: HostElement, anchor?: HostNode | null): void
   remove(el: HostNode): void
   createElement(
     type: string,
-    isSVG?: boolean,
-    isCustomizedBuiltIn?: string
+    namespace?: ElementNamespace,
+    isCustomizedBuiltIn?: string,
+    vnodeProps?: (VNodeProps & { [key: string]: any }) | null,
   ): HostElement
   createText(text: string): HostNode
   createComment(text: string): HostNode
@@ -113,8 +138,10 @@ export interface RendererOptions<
     content: string,
     parent: HostElement,
     anchor: HostNode | null,
-    isSVG: boolean
-  ): HostElement
+    namespace: ElementNamespace,
+    start?: HostNode | null,
+    end?: HostNode | null,
+  ): [HostNode, HostNode]
 }
 
 // Renderer Node can technically be any object in the context of core renderer
@@ -122,7 +149,7 @@ export interface RendererOptions<
 // functions provided via options, so the internal constraint is really just
 // a generic object.
 export interface RendererNode {
-  [key: string]: any
+  [key: string | symbol]: any
 }
 
 export interface RendererElement extends RendererNode {}
@@ -132,7 +159,7 @@ export interface RendererElement extends RendererNode {}
 // to optimize bundle size.
 export interface RendererInternals<
   HostNode = RendererNode,
-  HostElement = RendererElement
+  HostElement = RendererElement,
 > {
   p: PatchFn
   um: UnmountFn
@@ -156,8 +183,9 @@ type PatchFn = (
   anchor?: RendererNode | null,
   parentComponent?: ComponentInternalInstance | null,
   parentSuspense?: SuspenseBoundary | null,
-  isSVG?: boolean,
-  optimized?: boolean
+  namespace?: ElementNamespace,
+  slotScopeIds?: string[] | null,
+  optimized?: boolean,
 ) => void
 
 type MountChildrenFn = (
@@ -166,9 +194,10 @@ type MountChildrenFn = (
   anchor: RendererNode | null,
   parentComponent: ComponentInternalInstance | null,
   parentSuspense: SuspenseBoundary | null,
-  isSVG: boolean,
+  namespace: ElementNamespace,
+  slotScopeIds: string[] | null,
   optimized: boolean,
-  start?: number
+  start?: number,
 ) => void
 
 type PatchChildrenFn = (
@@ -178,8 +207,9 @@ type PatchChildrenFn = (
   anchor: RendererNode | null,
   parentComponent: ComponentInternalInstance | null,
   parentSuspense: SuspenseBoundary | null,
-  isSVG: boolean,
-  optimized?: boolean
+  namespace: ElementNamespace,
+  slotScopeIds: string[] | null,
+  optimized: boolean,
 ) => void
 
 type PatchBlockChildrenFn = (
@@ -188,7 +218,8 @@ type PatchBlockChildrenFn = (
   fallbackContainer: RendererElement,
   parentComponent: ComponentInternalInstance | null,
   parentSuspense: SuspenseBoundary | null,
-  isSVG: boolean
+  namespace: ElementNamespace,
+  slotScopeIds: string[] | null,
 ) => void
 
 type MoveFn = (
@@ -196,7 +227,7 @@ type MoveFn = (
   container: RendererElement,
   anchor: RendererNode | null,
   type: MoveType,
-  parentSuspense?: SuspenseBoundary | null
+  parentSuspense?: SuspenseBoundary | null,
 ) => void
 
 type NextFn = (vnode: VNode) => RendererNode | null
@@ -205,7 +236,8 @@ type UnmountFn = (
   vnode: VNode,
   parentComponent: ComponentInternalInstance | null,
   parentSuspense: SuspenseBoundary | null,
-  doRemove?: boolean
+  doRemove?: boolean,
+  optimized?: boolean,
 ) => void
 
 type RemoveFn = (vnode: VNode) => void
@@ -215,7 +247,8 @@ type UnmountChildrenFn = (
   parentComponent: ComponentInternalInstance | null,
   parentSuspense: SuspenseBoundary | null,
   doRemove?: boolean,
-  start?: number
+  optimized?: boolean,
+  start?: number,
 ) => void
 
 export type MountComponentFn = (
@@ -224,15 +257,15 @@ export type MountComponentFn = (
   anchor: RendererNode | null,
   parentComponent: ComponentInternalInstance | null,
   parentSuspense: SuspenseBoundary | null,
-  isSVG: boolean,
-  optimized: boolean
+  namespace: ElementNamespace,
+  optimized: boolean,
 ) => void
 
 type ProcessTextOrCommentFn = (
   n1: VNode | null,
   n2: VNode,
   container: RendererElement,
-  anchor: RendererNode | null
+  anchor: RendererNode | null,
 ) => void
 
 export type SetupRenderEffectFn = (
@@ -241,32 +274,25 @@ export type SetupRenderEffectFn = (
   container: RendererElement,
   anchor: RendererNode | null,
   parentSuspense: SuspenseBoundary | null,
-  isSVG: boolean,
-  optimized: boolean
+  namespace: ElementNamespace,
+  optimized: boolean,
 ) => void
 
-export const enum MoveType {
+export enum MoveType {
   ENTER,
   LEAVE,
-  REORDER
+  REORDER,
 }
 
-const prodEffectOptions = {
-  scheduler: queueJob
-}
-
-function createDevEffectOptions(
-  instance: ComponentInternalInstance
-): ReactiveEffectOptions {
-  return {
-    scheduler: queueJob,
-    onTrack: instance.rtc ? e => invokeArrayFns(instance.rtc!, e) : void 0,
-    onTrigger: instance.rtg ? e => invokeArrayFns(instance.rtg!, e) : void 0
-  }
-}
-
-export const queuePostRenderEffect = __FEATURE_SUSPENSE__
-  ? queueEffectWithSuspense
+export const queuePostRenderEffect: (
+  fn: SchedulerJobs,
+  suspense: SuspenseBoundary | null,
+) => void = __FEATURE_SUSPENSE__
+  ? __TEST__
+    ? // vitest can't seem to handle eager circular dependency
+      (fn: Function | Function[], suspense: SuspenseBoundary | null) =>
+        queueEffectWithSuspense(fn, suspense)
+    : queueEffectWithSuspense
   : queuePostFlushCb
 
 /**
@@ -286,8 +312,8 @@ export const queuePostRenderEffect = __FEATURE_SUSPENSE__
  */
 export function createRenderer<
   HostNode = RendererNode,
-  HostElement = RendererElement
->(options: RendererOptions<HostNode, HostElement>) {
+  HostElement = RendererElement,
+>(options: RendererOptions<HostNode, HostElement>): Renderer<HostElement> {
   return baseCreateRenderer<HostNode, HostElement>(options)
 }
 
@@ -295,28 +321,39 @@ export function createRenderer<
 // Hydration logic is only used when calling this function, making it
 // tree-shakable.
 export function createHydrationRenderer(
-  options: RendererOptions<Node, Element>
-) {
+  options: RendererOptions<Node, Element>,
+): HydrationRenderer {
   return baseCreateRenderer(options, createHydrationFunctions)
 }
 
 // overload 1: no hydration
 function baseCreateRenderer<
   HostNode = RendererNode,
-  HostElement = RendererElement
+  HostElement = RendererElement,
 >(options: RendererOptions<HostNode, HostElement>): Renderer<HostElement>
 
 // overload 2: with hydration
 function baseCreateRenderer(
   options: RendererOptions<Node, Element>,
-  createHydrationFns: typeof createHydrationFunctions
+  createHydrationFns: typeof createHydrationFunctions,
 ): HydrationRenderer
 
 // implementation
 function baseCreateRenderer(
   options: RendererOptions,
-  createHydrationFns?: typeof createHydrationFunctions
+  createHydrationFns?: typeof createHydrationFunctions,
 ): any {
+  // compile-time feature flags check
+  if (__ESM_BUNDLER__ && !__TEST__) {
+    initFeatureFlags()
+  }
+
+  const target = getGlobalThis()
+  target.__VUE__ = true
+  if (__DEV__ || __FEATURE_PROD_DEVTOOLS__) {
+    setDevtoolsHook(target.__VUE_DEVTOOLS_GLOBAL_HOOK__, target)
+  }
+
   const {
     insert: hostInsert,
     remove: hostRemove,
@@ -329,8 +366,7 @@ function baseCreateRenderer(
     parentNode: hostParentNode,
     nextSibling: hostNextSibling,
     setScopeId: hostSetScopeId = NOOP,
-    cloneNode: hostCloneNode,
-    insertStaticContent: hostInsertStaticContent
+    insertStaticContent: hostInsertStaticContent,
   } = options
 
   // Note: functions inside this closure should use `const xxx = () => {}`
@@ -342,14 +378,24 @@ function baseCreateRenderer(
     anchor = null,
     parentComponent = null,
     parentSuspense = null,
-    isSVG = false,
-    optimized = false
+    namespace = undefined,
+    slotScopeIds = null,
+    optimized = __DEV__ && isHmrUpdating ? false : !!n2.dynamicChildren,
   ) => {
+    if (n1 === n2) {
+      return
+    }
+
     // patching & not same type, unmount old tree
     if (n1 && !isSameVNodeType(n1, n2)) {
       anchor = getNextHostNode(n1)
       unmount(n1, parentComponent, parentSuspense, true)
       n1 = null
+    }
+
+    if (n2.patchFlag === PatchFlags.BAIL) {
+      optimized = false
+      n2.dynamicChildren = null
     }
 
     const { type, ref, shapeFlag } = n2
@@ -362,8 +408,10 @@ function baseCreateRenderer(
         break
       case Static:
         if (n1 == null) {
-          mountStaticNode(n2, container, anchor, isSVG)
-        } // static nodes are noop on patch
+          mountStaticNode(n2, container, anchor, namespace)
+        } else if (__DEV__) {
+          patchStaticNode(n1, n2, container, namespace)
+        }
         break
       case Fragment:
         processFragment(
@@ -373,8 +421,9 @@ function baseCreateRenderer(
           anchor,
           parentComponent,
           parentSuspense,
-          isSVG,
-          optimized
+          namespace,
+          slotScopeIds,
+          optimized,
         )
         break
       default:
@@ -386,8 +435,9 @@ function baseCreateRenderer(
             anchor,
             parentComponent,
             parentSuspense,
-            isSVG,
-            optimized
+            namespace,
+            slotScopeIds,
+            optimized,
           )
         } else if (shapeFlag & ShapeFlags.COMPONENT) {
           processComponent(
@@ -397,20 +447,22 @@ function baseCreateRenderer(
             anchor,
             parentComponent,
             parentSuspense,
-            isSVG,
-            optimized
+            namespace,
+            slotScopeIds,
+            optimized,
           )
         } else if (shapeFlag & ShapeFlags.TELEPORT) {
           ;(type as typeof TeleportImpl).process(
-            n1,
-            n2,
+            n1 as TeleportVNode,
+            n2 as TeleportVNode,
             container,
             anchor,
             parentComponent,
             parentSuspense,
-            isSVG,
+            namespace,
+            slotScopeIds,
             optimized,
-            internals
+            internals,
           )
         } else if (__FEATURE_SUSPENSE__ && shapeFlag & ShapeFlags.SUSPENSE) {
           ;(type as typeof SuspenseImpl).process(
@@ -420,9 +472,10 @@ function baseCreateRenderer(
             anchor,
             parentComponent,
             parentSuspense,
-            isSVG,
+            namespace,
+            slotScopeIds,
             optimized,
-            internals
+            internals,
           )
         } else if (__DEV__) {
           warn('Invalid VNode type:', type, `(${typeof type})`)
@@ -431,9 +484,9 @@ function baseCreateRenderer(
 
     // set ref
     if (ref != null && parentComponent) {
-      const refValue =
-        shapeFlag & ShapeFlags.STATEFUL_COMPONENT ? n2.component!.proxy : n2.el
-      setRef(ref, n1 && n1.ref, parentComponent, refValue)
+      setRef(ref, n1 && n1.ref, parentSuspense, n2 || n1, !n2)
+    } else if (ref == null && n1 && n1.ref != null) {
+      setRef(n1.ref, null, parentSuspense, n1, true)
     }
   }
 
@@ -442,12 +495,32 @@ function baseCreateRenderer(
       hostInsert(
         (n2.el = hostCreateText(n2.children as string)),
         container,
-        anchor
+        anchor,
       )
     } else {
       const el = (n2.el = n1.el!)
       if (n2.children !== n1.children) {
-        hostSetText(el, n2.children as string)
+        // We don't inherit el for cached text nodes in `traverseStaticChildren`
+        // to avoid retaining detached DOM nodes. However, the text node may be
+        // changed during HMR. In this case we need to replace the old text node
+        // with the new one.
+        if (
+          __DEV__ &&
+          isHmrUpdating &&
+          n2.patchFlag === PatchFlags.CACHED &&
+          '__elIndex' in n1
+        ) {
+          const childNodes = __TEST__
+            ? container.children
+            : container.childNodes
+          const newChild = hostCreateText(n2.children as string)
+          const oldChild =
+            childNodes[((n2 as any).__elIndex = (n1 as any).__elIndex)]
+          hostInsert(newChild, container, oldChild)
+          hostRemove(oldChild)
+        } else {
+          hostSetText(el, n2.children as string)
+        }
       }
     }
   }
@@ -456,13 +529,13 @@ function baseCreateRenderer(
     n1,
     n2,
     container,
-    anchor
+    anchor,
   ) => {
     if (n1 == null) {
       hostInsert(
         (n2.el = hostCreateComment((n2.children as string) || '')),
         container,
-        anchor
+        anchor,
       )
     } else {
       // there's no support for dynamic comments
@@ -474,20 +547,69 @@ function baseCreateRenderer(
     n2: VNode,
     container: RendererElement,
     anchor: RendererNode | null,
-    isSVG: boolean
+    namespace: ElementNamespace,
   ) => {
-    if (n2.el && hostCloneNode !== undefined) {
-      hostInsert(hostCloneNode(n2.el), container, anchor)
-    } else {
-      // static nodes are only present when used with compiler-dom/runtime-dom
-      // which guarantees presence of hostInsertStaticContent.
-      n2.el = hostInsertStaticContent!(
+    // static nodes are only present when used with compiler-dom/runtime-dom
+    // which guarantees presence of hostInsertStaticContent.
+    ;[n2.el, n2.anchor] = hostInsertStaticContent!(
+      n2.children as string,
+      container,
+      anchor,
+      namespace,
+      n2.el,
+      n2.anchor,
+    )
+  }
+
+  /**
+   * Dev / HMR only
+   */
+  const patchStaticNode = (
+    n1: VNode,
+    n2: VNode,
+    container: RendererElement,
+    namespace: ElementNamespace,
+  ) => {
+    // static nodes are only patched during dev for HMR
+    if (n2.children !== n1.children) {
+      const anchor = hostNextSibling(n1.anchor!)
+      // remove existing
+      removeStaticNode(n1)
+      // insert new
+      ;[n2.el, n2.anchor] = hostInsertStaticContent!(
         n2.children as string,
         container,
         anchor,
-        isSVG
+        namespace,
       )
+    } else {
+      n2.el = n1.el
+      n2.anchor = n1.anchor
     }
+  }
+
+  const moveStaticNode = (
+    { el, anchor }: VNode,
+    container: RendererElement,
+    nextSibling: RendererNode | null,
+  ) => {
+    let next
+    while (el && el !== anchor) {
+      next = hostNextSibling(el)
+      hostInsert(el, container, nextSibling)
+      el = next
+    }
+    hostInsert(anchor!, container, nextSibling)
+  }
+
+  const removeStaticNode = ({ el, anchor }: VNode) => {
+    let next
+    while (el && el !== anchor) {
+      next = hostNextSibling(el)
+      hostRemove(el)
+      el = next
+    }
+    hostRemove(anchor!)
   }
 
   const processElement = (
@@ -497,10 +619,16 @@ function baseCreateRenderer(
     anchor: RendererNode | null,
     parentComponent: ComponentInternalInstance | null,
     parentSuspense: SuspenseBoundary | null,
-    isSVG: boolean,
-    optimized: boolean
+    namespace: ElementNamespace,
+    slotScopeIds: string[] | null,
+    optimized: boolean,
   ) => {
-    isSVG = isSVG || (n2.type as string) === 'svg'
+    if (n2.type === 'svg') {
+      namespace = 'svg'
+    } else if (n2.type === 'math') {
+      namespace = 'mathml'
+    }
+
     if (n1 == null) {
       mountElement(
         n2,
@@ -508,11 +636,32 @@ function baseCreateRenderer(
         anchor,
         parentComponent,
         parentSuspense,
-        isSVG,
-        optimized
+        namespace,
+        slotScopeIds,
+        optimized,
       )
     } else {
-      patchElement(n1, n2, parentComponent, parentSuspense, isSVG, optimized)
+      const customElement = !!(n1.el && (n1.el as VueElement)._isVueCE)
+        ? (n1.el as VueElement)
+        : null
+      try {
+        if (customElement) {
+          customElement._beginPatch()
+        }
+        patchElement(
+          n1,
+          n2,
+          parentComponent,
+          parentSuspense,
+          namespace,
+          slotScopeIds,
+          optimized,
+        )
+      } finally {
+        if (customElement) {
+          customElement._endPatch()
+        }
+      }
     }
   }
 
@@ -522,91 +671,134 @@ function baseCreateRenderer(
     anchor: RendererNode | null,
     parentComponent: ComponentInternalInstance | null,
     parentSuspense: SuspenseBoundary | null,
-    isSVG: boolean,
-    optimized: boolean
+    namespace: ElementNamespace,
+    slotScopeIds: string[] | null,
+    optimized: boolean,
   ) => {
     let el: RendererElement
     let vnodeHook: VNodeHook | undefined | null
-    const {
-      type,
+    const { props, shapeFlag, transition, dirs } = vnode
+
+    el = vnode.el = hostCreateElement(
+      vnode.type as string,
+      namespace,
+      props && props.is,
       props,
-      shapeFlag,
-      transition,
-      scopeId,
-      patchFlag,
-      dirs
-    } = vnode
-    if (
-      vnode.el &&
-      hostCloneNode !== undefined &&
-      patchFlag === PatchFlags.HOISTED
-    ) {
-      // If a vnode has non-null el, it means it's being reused.
-      // Only static vnodes can be reused, so its mounted DOM nodes should be
-      // exactly the same, and we can simply do a clone here.
-      el = vnode.el = hostCloneNode(vnode.el)
-    } else {
-      el = vnode.el = hostCreateElement(
-        vnode.type as string,
-        isSVG,
-        props && props.is
+    )
+
+    // mount children first, since some props may rely on child content
+    // being already rendered, e.g. `<select value>`
+    if (shapeFlag & ShapeFlags.TEXT_CHILDREN) {
+      hostSetElementText(el, vnode.children as string)
+    } else if (shapeFlag & ShapeFlags.ARRAY_CHILDREN) {
+      mountChildren(
+        vnode.children as VNodeArrayChildren,
+        el,
+        null,
+        parentComponent,
+        parentSuspense,
+        resolveChildrenNamespace(vnode, namespace),
+        slotScopeIds,
+        optimized,
       )
-      // props
-      if (props) {
-        for (const key in props) {
-          if (!isReservedProp(key)) {
-            hostPatchProp(el, key, null, props[key], isSVG)
-          }
-        }
-        if ((vnodeHook = props.onVnodeBeforeMount)) {
-          invokeVNodeHook(vnodeHook, parentComponent, vnode)
-        }
-      }
-      if (dirs) {
-        invokeDirectiveHook(vnode, null, parentComponent, 'beforeMount')
-      }
+    }
 
-      // scopeId
-      if (scopeId) {
-        hostSetScopeId(el, scopeId)
+    if (dirs) {
+      invokeDirectiveHook(vnode, null, parentComponent, 'created')
+    }
+    // scopeId
+    setScopeId(el, vnode, vnode.scopeId, slotScopeIds, parentComponent)
+    // props
+    if (props) {
+      for (const key in props) {
+        if (key !== 'value' && !isReservedProp(key)) {
+          hostPatchProp(el, key, null, props[key], namespace, parentComponent)
+        }
       }
-      const treeOwnerId = parentComponent && parentComponent.type.__scopeId
-      // vnode's own scopeId and the current patched component's scopeId is
-      // different - this is a slot content node.
-      if (treeOwnerId && treeOwnerId !== scopeId) {
-        hostSetScopeId(el, treeOwnerId + '-s')
+      /**
+       * Special case for setting value on DOM elements:
+       * - it can be order-sensitive (e.g. should be set *after* min/max, #2325, #4024)
+       * - it needs to be forced (#1471)
+       * #2353 proposes adding another renderer option to configure this, but
+       * the properties affects are so finite it is worth special casing it
+       * here to reduce the complexity. (Special casing it also should not
+       * affect non-DOM renderers)
+       */
+      if ('value' in props) {
+        hostPatchProp(el, 'value', null, props.value, namespace)
       }
-
-      // children
-      if (shapeFlag & ShapeFlags.TEXT_CHILDREN) {
-        hostSetElementText(el, vnode.children as string)
-      } else if (shapeFlag & ShapeFlags.ARRAY_CHILDREN) {
-        mountChildren(
-          vnode.children as VNodeArrayChildren,
-          el,
-          null,
-          parentComponent,
-          parentSuspense,
-          isSVG && type !== 'foreignObject',
-          optimized || !!vnode.dynamicChildren
-        )
-      }
-      if (transition && !transition.persisted) {
-        transition.beforeEnter(el)
+      if ((vnodeHook = props.onVnodeBeforeMount)) {
+        invokeVNodeHook(vnodeHook, parentComponent, vnode)
       }
     }
 
+    if (__DEV__ || __FEATURE_PROD_DEVTOOLS__) {
+      def(el, '__vnode', vnode, true)
+      def(el, '__vueParentComponent', parentComponent, true)
+    }
+
+    if (dirs) {
+      invokeDirectiveHook(vnode, null, parentComponent, 'beforeMount')
+    }
+    // #1583 For inside suspense + suspense not resolved case, enter hook should call when suspense resolved
+    // #1689 For inside suspense + suspense resolved case, just call it
+    const needCallTransitionHooks = needTransition(parentSuspense, transition)
+    if (needCallTransitionHooks) {
+      transition!.beforeEnter(el)
+    }
     hostInsert(el, container, anchor)
     if (
       (vnodeHook = props && props.onVnodeMounted) ||
-      (transition && !transition.persisted) ||
+      needCallTransitionHooks ||
       dirs
     ) {
       queuePostRenderEffect(() => {
         vnodeHook && invokeVNodeHook(vnodeHook, parentComponent, vnode)
-        transition && !transition.persisted && transition.enter(el)
+        needCallTransitionHooks && transition!.enter(el)
         dirs && invokeDirectiveHook(vnode, null, parentComponent, 'mounted')
       }, parentSuspense)
+    }
+  }
+
+  const setScopeId = (
+    el: RendererElement,
+    vnode: VNode,
+    scopeId: string | null,
+    slotScopeIds: string[] | null,
+    parentComponent: ComponentInternalInstance | null,
+  ) => {
+    if (scopeId) {
+      hostSetScopeId(el, scopeId)
+    }
+    if (slotScopeIds) {
+      for (let i = 0; i < slotScopeIds.length; i++) {
+        hostSetScopeId(el, slotScopeIds[i])
+      }
+    }
+    if (parentComponent) {
+      let subTree = parentComponent.subTree
+      if (
+        __DEV__ &&
+        subTree.patchFlag > 0 &&
+        subTree.patchFlag & PatchFlags.DEV_ROOT_FRAGMENT
+      ) {
+        subTree =
+          filterSingleRoot(subTree.children as VNodeArrayChildren) || subTree
+      }
+      if (
+        vnode === subTree ||
+        (isSuspense(subTree.type) &&
+          (subTree.ssContent === vnode || subTree.ssFallback === vnode))
+      ) {
+        const parentVNode = parentComponent.vnode
+        setScopeId(
+          el,
+          parentVNode,
+          parentVNode.scopeId,
+          parentVNode.slotScopeIds,
+          parentComponent.parent,
+        )
+      }
     }
   }
 
@@ -616,9 +808,10 @@ function baseCreateRenderer(
     anchor,
     parentComponent,
     parentSuspense,
-    isSVG,
+    namespace: ElementNamespace,
+    slotScopeIds,
     optimized,
-    start = 0
+    start = 0,
   ) => {
     for (let i = start; i < children.length; i++) {
       const child = (children[i] = optimized
@@ -631,8 +824,9 @@ function baseCreateRenderer(
         anchor,
         parentComponent,
         parentSuspense,
-        isSVG,
-        optimized
+        namespace,
+        slotScopeIds,
+        optimized,
       )
     }
   }
@@ -642,27 +836,75 @@ function baseCreateRenderer(
     n2: VNode,
     parentComponent: ComponentInternalInstance | null,
     parentSuspense: SuspenseBoundary | null,
-    isSVG: boolean,
-    optimized: boolean
+    namespace: ElementNamespace,
+    slotScopeIds: string[] | null,
+    optimized: boolean,
   ) => {
     const el = (n2.el = n1.el!)
+    if (__DEV__ || __FEATURE_PROD_DEVTOOLS__) {
+      el.__vnode = n2
+    }
     let { patchFlag, dynamicChildren, dirs } = n2
-    const oldProps = (n1 && n1.props) || EMPTY_OBJ
+    // #1426 take the old vnode's patch flag into account since user may clone a
+    // compiler-generated vnode, which de-opts to FULL_PROPS
+    patchFlag |= n1.patchFlag & PatchFlags.FULL_PROPS
+    const oldProps = n1.props || EMPTY_OBJ
     const newProps = n2.props || EMPTY_OBJ
     let vnodeHook: VNodeHook | undefined | null
 
+    // disable recurse in beforeUpdate hooks
+    parentComponent && toggleRecurse(parentComponent, false)
     if ((vnodeHook = newProps.onVnodeBeforeUpdate)) {
       invokeVNodeHook(vnodeHook, parentComponent, n2, n1)
     }
     if (dirs) {
       invokeDirectiveHook(n2, n1, parentComponent, 'beforeUpdate')
     }
+    parentComponent && toggleRecurse(parentComponent, true)
 
-    if (__DEV__ && parentComponent && parentComponent.renderUpdated) {
+    if (__DEV__ && isHmrUpdating) {
       // HMR updated, force full diff
       patchFlag = 0
       optimized = false
       dynamicChildren = null
+    }
+
+    // #9135 innerHTML / textContent unset needs to happen before possible
+    // new children mount
+    if (
+      (oldProps.innerHTML && newProps.innerHTML == null) ||
+      (oldProps.textContent && newProps.textContent == null)
+    ) {
+      hostSetElementText(el, '')
+    }
+
+    if (dynamicChildren) {
+      patchBlockChildren(
+        n1.dynamicChildren!,
+        dynamicChildren,
+        el,
+        parentComponent,
+        parentSuspense,
+        resolveChildrenNamespace(n2, namespace),
+        slotScopeIds,
+      )
+      if (__DEV__) {
+        // necessary for HMR
+        traverseStaticChildren(n1, n2)
+      }
+    } else if (!optimized) {
+      // full diff
+      patchChildren(
+        n1,
+        n2,
+        el,
+        null,
+        parentComponent,
+        parentSuspense,
+        resolveChildrenNamespace(n2, namespace),
+        slotScopeIds,
+        false,
+      )
     }
 
     if (patchFlag > 0) {
@@ -672,28 +914,20 @@ function baseCreateRenderer(
       // (i.e. at the exact same position in the source template)
       if (patchFlag & PatchFlags.FULL_PROPS) {
         // element props contain dynamic keys, full diff needed
-        patchProps(
-          el,
-          n2,
-          oldProps,
-          newProps,
-          parentComponent,
-          parentSuspense,
-          isSVG
-        )
+        patchProps(el, oldProps, newProps, parentComponent, namespace)
       } else {
         // class
         // this flag is matched when the element has dynamic class bindings.
         if (patchFlag & PatchFlags.CLASS) {
           if (oldProps.class !== newProps.class) {
-            hostPatchProp(el, 'class', null, newProps.class, isSVG)
+            hostPatchProp(el, 'class', null, newProps.class, namespace)
           }
         }
 
         // style
         // this flag is matched when the element has dynamic style bindings
         if (patchFlag & PatchFlags.STYLE) {
-          hostPatchProp(el, 'style', oldProps.style, newProps.style, isSVG)
+          hostPatchProp(el, 'style', oldProps.style, newProps.style, namespace)
         }
 
         // props
@@ -709,18 +943,9 @@ function baseCreateRenderer(
             const key = propsToUpdate[i]
             const prev = oldProps[key]
             const next = newProps[key]
-            if (prev !== next) {
-              hostPatchProp(
-                el,
-                key,
-                prev,
-                next,
-                isSVG,
-                n1.children as VNode[],
-                parentComponent,
-                parentSuspense,
-                unmountChildren
-              )
+            // #1471 force patch value
+            if (next !== prev || key === 'value') {
+              hostPatchProp(el, key, prev, next, namespace, parentComponent)
             }
           }
         }
@@ -735,38 +960,7 @@ function baseCreateRenderer(
       }
     } else if (!optimized && dynamicChildren == null) {
       // unoptimized, full diff
-      patchProps(
-        el,
-        n2,
-        oldProps,
-        newProps,
-        parentComponent,
-        parentSuspense,
-        isSVG
-      )
-    }
-
-    const areChildrenSVG = isSVG && n2.type !== 'foreignObject'
-    if (dynamicChildren) {
-      patchBlockChildren(
-        n1.dynamicChildren!,
-        dynamicChildren,
-        el,
-        parentComponent,
-        parentSuspense,
-        areChildrenSVG
-      )
-    } else if (!optimized) {
-      // full diff
-      patchChildren(
-        n1,
-        n2,
-        el,
-        null,
-        parentComponent,
-        parentSuspense,
-        areChildrenSVG
-      )
+      patchProps(el, oldProps, newProps, parentComponent, namespace)
     }
 
     if ((vnodeHook = newProps.onVnodeUpdated) || dirs) {
@@ -784,22 +978,27 @@ function baseCreateRenderer(
     fallbackContainer,
     parentComponent,
     parentSuspense,
-    isSVG
+    namespace: ElementNamespace,
+    slotScopeIds,
   ) => {
     for (let i = 0; i < newChildren.length; i++) {
       const oldVNode = oldChildren[i]
       const newVNode = newChildren[i]
       // Determine the container (parent element) for the patch.
       const container =
+        // oldVNode may be an errored async setup() component inside Suspense
+        // which will not have a mounted element
+        oldVNode.el &&
         // - In the case of a Fragment, we need to provide the actual parent
         // of the Fragment itself so it can move its children.
-        oldVNode.type === Fragment ||
-        // - In the case of different nodes, there is going to be a replacement
-        // which also requires the correct parent container
-        !isSameVNodeType(oldVNode, newVNode) ||
-        // - In the case of a component, it could contain anything.
-        oldVNode.shapeFlag & ShapeFlags.COMPONENT
-          ? hostParentNode(oldVNode.el!)!
+        (oldVNode.type === Fragment ||
+          // - In the case of different nodes, there is going to be a replacement
+          // which also requires the correct parent container
+          !isSameVNodeType(oldVNode, newVNode) ||
+          // - In the case of a component, it could contain anything.
+          oldVNode.shapeFlag &
+            (ShapeFlags.COMPONENT | ShapeFlags.TELEPORT | ShapeFlags.SUSPENSE))
+          ? hostParentNode(oldVNode.el)!
           : // In other cases, the parent container is not actually used so we
             // just pass the block element here to avoid a DOM parentNode call.
             fallbackContainer
@@ -810,40 +1009,21 @@ function baseCreateRenderer(
         null,
         parentComponent,
         parentSuspense,
-        isSVG,
-        true
+        namespace,
+        slotScopeIds,
+        true,
       )
     }
   }
 
   const patchProps = (
     el: RendererElement,
-    vnode: VNode,
     oldProps: Data,
     newProps: Data,
     parentComponent: ComponentInternalInstance | null,
-    parentSuspense: SuspenseBoundary | null,
-    isSVG: boolean
+    namespace: ElementNamespace,
   ) => {
     if (oldProps !== newProps) {
-      for (const key in newProps) {
-        if (isReservedProp(key)) continue
-        const next = newProps[key]
-        const prev = oldProps[key]
-        if (next !== prev) {
-          hostPatchProp(
-            el,
-            key,
-            prev,
-            next,
-            isSVG,
-            vnode.children as VNode[],
-            parentComponent,
-            parentSuspense,
-            unmountChildren
-          )
-        }
-      }
       if (oldProps !== EMPTY_OBJ) {
         for (const key in oldProps) {
           if (!isReservedProp(key) && !(key in newProps)) {
@@ -852,14 +1032,24 @@ function baseCreateRenderer(
               key,
               oldProps[key],
               null,
-              isSVG,
-              vnode.children as VNode[],
+              namespace,
               parentComponent,
-              parentSuspense,
-              unmountChildren
             )
           }
         }
+      }
+      for (const key in newProps) {
+        // empty string is not valid prop
+        if (isReservedProp(key)) continue
+        const next = newProps[key]
+        const prev = oldProps[key]
+        // defer patching value
+        if (next !== prev && key !== 'value') {
+          hostPatchProp(el, key, prev, next, namespace, parentComponent)
+        }
+      }
+      if ('value' in newProps) {
+        hostPatchProp(el, 'value', oldProps.value, newProps.value, namespace)
       }
     }
   }
@@ -871,22 +1061,31 @@ function baseCreateRenderer(
     anchor: RendererNode | null,
     parentComponent: ComponentInternalInstance | null,
     parentSuspense: SuspenseBoundary | null,
-    isSVG: boolean,
-    optimized: boolean
+    namespace: ElementNamespace,
+    slotScopeIds: string[] | null,
+    optimized: boolean,
   ) => {
     const fragmentStartAnchor = (n2.el = n1 ? n1.el : hostCreateText(''))!
     const fragmentEndAnchor = (n2.anchor = n1 ? n1.anchor : hostCreateText(''))!
 
-    let { patchFlag, dynamicChildren } = n2
-    if (patchFlag > 0) {
-      optimized = true
-    }
+    let { patchFlag, dynamicChildren, slotScopeIds: fragmentSlotScopeIds } = n2
 
-    if (__DEV__ && parentComponent && parentComponent.renderUpdated) {
-      // HMR updated, force full diff
+    if (
+      __DEV__ &&
+      // #5523 dev root fragment may inherit directives
+      (isHmrUpdating || patchFlag & PatchFlags.DEV_ROOT_FRAGMENT)
+    ) {
+      // HMR updated / Dev root fragment (w/ comments), force full diff
       patchFlag = 0
       optimized = false
       dynamicChildren = null
+    }
+
+    // check if this is a slot fragment with :slotted scope ids
+    if (fragmentSlotScopeIds) {
+      slotScopeIds = slotScopeIds
+        ? slotScopeIds.concat(fragmentSlotScopeIds)
+        : fragmentSlotScopeIds
     }
 
     if (n1 == null) {
@@ -896,26 +1095,53 @@ function baseCreateRenderer(
       // since they are either generated by the compiler, or implicitly created
       // from arrays.
       mountChildren(
-        n2.children as VNodeArrayChildren,
+        // #10007
+        // such fragment like `<></>` will be compiled into
+        // a fragment which doesn't have a children.
+        // In this case fallback to an empty array
+        (n2.children || []) as VNodeArrayChildren,
         container,
         fragmentEndAnchor,
         parentComponent,
         parentSuspense,
-        isSVG,
-        optimized
+        namespace,
+        slotScopeIds,
+        optimized,
       )
     } else {
-      if (patchFlag & PatchFlags.STABLE_FRAGMENT && dynamicChildren) {
+      if (
+        patchFlag > 0 &&
+        patchFlag & PatchFlags.STABLE_FRAGMENT &&
+        dynamicChildren &&
+        // #2715 the previous fragment could've been a BAILed one as a result
+        // of renderSlot() with no valid children
+        n1.dynamicChildren &&
+        n1.dynamicChildren.length === dynamicChildren.length
+      ) {
         // a stable fragment (template root or <template v-for>) doesn't need to
         // patch children order, but it may contain dynamicChildren.
         patchBlockChildren(
-          n1.dynamicChildren!,
+          n1.dynamicChildren,
           dynamicChildren,
           container,
           parentComponent,
           parentSuspense,
-          isSVG
+          namespace,
+          slotScopeIds,
         )
+        if (__DEV__) {
+          // necessary for HMR
+          traverseStaticChildren(n1, n2)
+        } else if (
+          // #2080 if the stable fragment has a key, it's a <template v-for> that may
+          //  get moved around. Make sure all root level vnodes inherit el.
+          // #2134 or if it's a component root, it may also get moved around
+          // as the component is being moved.
+          n2.key != null ||
+          (parentComponent && n2 === parentComponent.subTree)
+        ) {
+          traverseStaticChildren(n1, n2, true /* shallow */)
+        }
       } else {
         // keyed / unkeyed, or manual fragments.
         // for keyed & unkeyed, since they are compiler generated from v-for,
@@ -928,8 +1154,9 @@ function baseCreateRenderer(
           fragmentEndAnchor,
           parentComponent,
           parentSuspense,
-          isSVG,
-          optimized
+          namespace,
+          slotScopeIds,
+          optimized,
         )
       }
     }
@@ -942,17 +1169,19 @@ function baseCreateRenderer(
     anchor: RendererNode | null,
     parentComponent: ComponentInternalInstance | null,
     parentSuspense: SuspenseBoundary | null,
-    isSVG: boolean,
-    optimized: boolean
+    namespace: ElementNamespace,
+    slotScopeIds: string[] | null,
+    optimized: boolean,
   ) => {
+    n2.slotScopeIds = slotScopeIds
     if (n1 == null) {
       if (n2.shapeFlag & ShapeFlags.COMPONENT_KEPT_ALIVE) {
         ;(parentComponent!.ctx as KeepAliveContext).activate(
           n2,
           container,
           anchor,
-          isSVG,
-          optimized
+          namespace,
+          optimized,
         )
       } else {
         mountComponent(
@@ -961,12 +1190,12 @@ function baseCreateRenderer(
           anchor,
           parentComponent,
           parentSuspense,
-          isSVG,
-          optimized
+          namespace,
+          optimized,
         )
       }
     } else {
-      updateComponent(n1, n2, parentComponent, optimized)
+      updateComponent(n1, n2, optimized)
     }
   }
 
@@ -976,14 +1205,20 @@ function baseCreateRenderer(
     anchor,
     parentComponent,
     parentSuspense,
-    isSVG,
-    optimized
+    namespace: ElementNamespace,
+    optimized,
   ) => {
-    const instance: ComponentInternalInstance = (initialVNode.component = createComponentInstance(
-      initialVNode,
-      parentComponent,
-      parentSuspense
-    ))
+    // 2.x compat may pre-create the component instance before actually
+    // mounting
+    const compatMountInstance =
+      __COMPAT__ && initialVNode.isCompatRoot && initialVNode.component
+    const instance: ComponentInternalInstance =
+      compatMountInstance ||
+      (initialVNode.component = createComponentInstance(
+        initialVNode,
+        parentComponent,
+        parentSuspense,
+      ))
 
     if (__DEV__ && instance.type.__hmrId) {
       registerHMR(instance)
@@ -1000,41 +1235,43 @@ function baseCreateRenderer(
     }
 
     // resolve props and slots for setup context
-    if (__DEV__) {
-      startMeasure(instance, `init`)
+    if (!(__COMPAT__ && compatMountInstance)) {
+      if (__DEV__) {
+        startMeasure(instance, `init`)
+      }
+      setupComponent(instance, false, optimized)
+      if (__DEV__) {
+        endMeasure(instance, `init`)
+      }
     }
-    setupComponent(instance)
-    if (__DEV__) {
-      endMeasure(instance, `init`)
-    }
+
+    // avoid hydration for hmr updating
+    if (__DEV__ && isHmrUpdating) initialVNode.el = null
 
     // setup() is async. This component relies on async logic to be resolved
     // before proceeding
     if (__FEATURE_SUSPENSE__ && instance.asyncDep) {
-      if (!parentSuspense) {
-        if (__DEV__) warn('async setup() is used without a suspense boundary!')
-        return
-      }
-
-      parentSuspense.registerDep(instance, setupRenderEffect)
+      parentSuspense &&
+        parentSuspense.registerDep(instance, setupRenderEffect, optimized)
 
       // Give it a placeholder if this is not hydration
+      // TODO handle self-defined fallback
       if (!initialVNode.el) {
         const placeholder = (instance.subTree = createVNode(Comment))
         processCommentNode(null, placeholder, container!, anchor)
+        initialVNode.placeholder = placeholder.el
       }
-      return
+    } else {
+      setupRenderEffect(
+        instance,
+        initialVNode,
+        container,
+        anchor,
+        parentSuspense,
+        namespace,
+        optimized,
+      )
     }
-
-    setupRenderEffect(
-      instance,
-      initialVNode,
-      container,
-      anchor,
-      parentSuspense,
-      isSVG,
-      optimized
-    )
 
     if (__DEV__) {
       popWarningContext()
@@ -1042,14 +1279,9 @@ function baseCreateRenderer(
     }
   }
 
-  const updateComponent = (
-    n1: VNode,
-    n2: VNode,
-    parentComponent: ComponentInternalInstance | null,
-    optimized: boolean
-  ) => {
+  const updateComponent = (n1: VNode, n2: VNode, optimized: boolean) => {
     const instance = (n2.component = n1.component)!
-    if (shouldUpdateComponent(n1, n2, parentComponent, optimized)) {
+    if (shouldUpdateComponent(n1, n2, optimized)) {
       if (
         __FEATURE_SUSPENSE__ &&
         instance.asyncDep &&
@@ -1068,16 +1300,13 @@ function baseCreateRenderer(
       } else {
         // normal update
         instance.next = n2
-        // in case the child component is also queued, remove it to avoid
-        // double updating the same child component in the same flush.
-        invalidateJob(instance.update)
-        // instance.update is the reactive effect runner.
+        // instance.update is the reactive effect.
         instance.update()
       }
     } else {
       // no update needed. just copy over properties
-      n2.component = n1.component
       n2.el = n1.el
+      instance.vnode = n2
     }
   }
 
@@ -1087,45 +1316,90 @@ function baseCreateRenderer(
     container,
     anchor,
     parentSuspense,
-    isSVG,
-    optimized
+    namespace: ElementNamespace,
+    optimized,
   ) => {
-    // create reactive effect for rendering
-    instance.update = effect(function componentEffect() {
+    const componentUpdateFn = () => {
       if (!instance.isMounted) {
         let vnodeHook: VNodeHook | null | undefined
         const { el, props } = initialVNode
-        const { bm, m, a, parent } = instance
-        if (__DEV__) {
-          startMeasure(instance, `render`)
-        }
-        const subTree = (instance.subTree = renderComponentRoot(instance))
-        if (__DEV__) {
-          endMeasure(instance, `render`)
-        }
+        const { bm, m, parent, root, type } = instance
+        const isAsyncWrapperVNode = isAsyncWrapper(initialVNode)
+
+        toggleRecurse(instance, false)
         // beforeMount hook
         if (bm) {
           invokeArrayFns(bm)
         }
         // onVnodeBeforeMount
-        if ((vnodeHook = props && props.onVnodeBeforeMount)) {
+        if (
+          !isAsyncWrapperVNode &&
+          (vnodeHook = props && props.onVnodeBeforeMount)
+        ) {
           invokeVNodeHook(vnodeHook, parent, initialVNode)
         }
+        if (
+          __COMPAT__ &&
+          isCompatEnabled(DeprecationTypes.INSTANCE_EVENT_HOOKS, instance)
+        ) {
+          instance.emit('hook:beforeMount')
+        }
+        toggleRecurse(instance, true)
+
         if (el && hydrateNode) {
-          if (__DEV__) {
-            startMeasure(instance, `hydrate`)
-          }
           // vnode has adopted host node - perform hydration instead of mount.
-          hydrateNode(
-            initialVNode.el as Node,
-            subTree,
-            instance,
-            parentSuspense
-          )
-          if (__DEV__) {
-            endMeasure(instance, `hydrate`)
+          const hydrateSubTree = () => {
+            if (__DEV__) {
+              startMeasure(instance, `render`)
+            }
+            instance.subTree = renderComponentRoot(instance)
+            if (__DEV__) {
+              endMeasure(instance, `render`)
+            }
+            if (__DEV__) {
+              startMeasure(instance, `hydrate`)
+            }
+            hydrateNode!(
+              el as Node,
+              instance.subTree,
+              instance,
+              parentSuspense,
+              null,
+            )
+            if (__DEV__) {
+              endMeasure(instance, `hydrate`)
+            }
+          }
+
+          if (
+            isAsyncWrapperVNode &&
+            (type as ComponentOptions).__asyncHydrate
+          ) {
+            ;(type as ComponentOptions).__asyncHydrate!(
+              el as Element,
+              instance,
+              hydrateSubTree,
+            )
+          } else {
+            hydrateSubTree()
           }
         } else {
+          // custom element style injection
+          if (
+            root.ce &&
+            // @ts-expect-error _def is private
+            (root.ce as VueElement)._def.shadowRoot !== false
+          ) {
+            root.ce._injectChildStyle(type)
+          }
+
+          if (__DEV__) {
+            startMeasure(instance, `render`)
+          }
+          const subTree = (instance.subTree = renderComponentRoot(instance))
+          if (__DEV__) {
+            endMeasure(instance, `render`)
+          }
           if (__DEV__) {
             startMeasure(instance, `patch`)
           }
@@ -1136,7 +1410,7 @@ function baseCreateRenderer(
             anchor,
             instance,
             parentSuspense,
-            isSVG
+            namespace,
           )
           if (__DEV__) {
             endMeasure(instance, `patch`)
@@ -1148,34 +1422,113 @@ function baseCreateRenderer(
           queuePostRenderEffect(m, parentSuspense)
         }
         // onVnodeMounted
-        if ((vnodeHook = props && props.onVnodeMounted)) {
-          queuePostRenderEffect(() => {
-            invokeVNodeHook(vnodeHook!, parent, initialVNode)
-          }, parentSuspense)
-        }
-        // activated hook for keep-alive roots.
         if (
-          a &&
-          initialVNode.shapeFlag & ShapeFlags.COMPONENT_SHOULD_KEEP_ALIVE
+          !isAsyncWrapperVNode &&
+          (vnodeHook = props && props.onVnodeMounted)
         ) {
-          queuePostRenderEffect(a, parentSuspense)
+          const scopedInitialVNode = initialVNode
+          queuePostRenderEffect(
+            () => invokeVNodeHook(vnodeHook!, parent, scopedInitialVNode),
+            parentSuspense,
+          )
+        }
+        if (
+          __COMPAT__ &&
+          isCompatEnabled(DeprecationTypes.INSTANCE_EVENT_HOOKS, instance)
+        ) {
+          queuePostRenderEffect(
+            () => instance.emit('hook:mounted'),
+            parentSuspense,
+          )
+        }
+
+        // activated hook for keep-alive roots.
+        // #1742 activated hook must be accessed after first render
+        // since the hook may be injected by a child keep-alive
+        if (
+          initialVNode.shapeFlag & ShapeFlags.COMPONENT_SHOULD_KEEP_ALIVE ||
+          (parent &&
+            isAsyncWrapper(parent.vnode) &&
+            parent.vnode.shapeFlag & ShapeFlags.COMPONENT_SHOULD_KEEP_ALIVE)
+        ) {
+          instance.a && queuePostRenderEffect(instance.a, parentSuspense)
+          if (
+            __COMPAT__ &&
+            isCompatEnabled(DeprecationTypes.INSTANCE_EVENT_HOOKS, instance)
+          ) {
+            queuePostRenderEffect(
+              () => instance.emit('hook:activated'),
+              parentSuspense,
+            )
+          }
         }
         instance.isMounted = true
+
+        if (__DEV__ || __FEATURE_PROD_DEVTOOLS__) {
+          devtoolsComponentAdded(instance)
+        }
+
+        // #2458: deference mount-only object parameters to prevent memleaks
+        initialVNode = container = anchor = null as any
       } else {
+        let { next, bu, u, parent, vnode } = instance
+
+        if (__FEATURE_SUSPENSE__) {
+          const nonHydratedAsyncRoot = locateNonHydratedAsyncRoot(instance)
+          // we are trying to update some async comp before hydration
+          // this will cause crash because we don't know the root node yet
+          if (nonHydratedAsyncRoot) {
+            // only sync the properties and abort the rest of operations
+            if (next) {
+              next.el = vnode.el
+              updateComponentPreRender(instance, next, optimized)
+            }
+            // and continue the rest of operations once the deps are resolved
+            nonHydratedAsyncRoot.asyncDep!.then(() => {
+              // the instance may be destroyed during the time period
+              if (!instance.isUnmounted) {
+                componentUpdateFn()
+              }
+            })
+            return
+          }
+        }
+
         // updateComponent
         // This is triggered by mutation of component's own state (next: null)
         // OR parent calling processComponent (next: VNode)
-        let { next, bu, u, parent, vnode } = instance
+        let originNext = next
         let vnodeHook: VNodeHook | null | undefined
         if (__DEV__) {
           pushWarningContext(next || instance.vnode)
         }
 
+        // Disallow component effect recursion during pre-lifecycle hooks.
+        toggleRecurse(instance, false)
         if (next) {
+          next.el = vnode.el
           updateComponentPreRender(instance, next, optimized)
         } else {
           next = vnode
         }
+
+        // beforeUpdate hook
+        if (bu) {
+          invokeArrayFns(bu)
+        }
+        // onVnodeBeforeUpdate
+        if ((vnodeHook = next.props && next.props.onVnodeBeforeUpdate)) {
+          invokeVNodeHook(vnodeHook, parent, next, vnode)
+        }
+        if (
+          __COMPAT__ &&
+          isCompatEnabled(DeprecationTypes.INSTANCE_EVENT_HOOKS, instance)
+        ) {
+          instance.emit('hook:beforeUpdate')
+        }
+        toggleRecurse(instance, true)
+
+        // render
         if (__DEV__) {
           startMeasure(instance, `render`)
         }
@@ -1185,20 +1538,7 @@ function baseCreateRenderer(
         }
         const prevTree = instance.subTree
         instance.subTree = nextTree
-        next.el = vnode.el
-        // beforeUpdate hook
-        if (bu) {
-          invokeArrayFns(bu)
-        }
-        // onVnodeBeforeUpdate
-        if ((vnodeHook = next.props && next.props.onVnodeBeforeUpdate)) {
-          invokeVNodeHook(vnodeHook, parent, next, vnode)
-        }
-        // reset refs
-        // only needed if previous patch had refs
-        if (instance.refs !== EMPTY_OBJ) {
-          instance.refs = {}
-        }
+
         if (__DEV__) {
           startMeasure(instance, `patch`)
         }
@@ -1211,13 +1551,13 @@ function baseCreateRenderer(
           getNextHostNode(prevTree),
           instance,
           parentSuspense,
-          isSVG
+          namespace,
         )
         if (__DEV__) {
           endMeasure(instance, `patch`)
         }
         next.el = nextTree.el
-        if (next === null) {
+        if (originNext === null) {
           // self-triggered update. In case of HOC, update parent component
           // vnode el. HOC is indicated by parent instance's subTree pointing
           // to child component's vnode
@@ -1229,28 +1569,75 @@ function baseCreateRenderer(
         }
         // onVnodeUpdated
         if ((vnodeHook = next.props && next.props.onVnodeUpdated)) {
-          queuePostRenderEffect(() => {
-            invokeVNodeHook(vnodeHook!, parent, next!, vnode)
-          }, parentSuspense)
+          queuePostRenderEffect(
+            () => invokeVNodeHook(vnodeHook!, parent, next!, vnode),
+            parentSuspense,
+          )
         }
+        if (
+          __COMPAT__ &&
+          isCompatEnabled(DeprecationTypes.INSTANCE_EVENT_HOOKS, instance)
+        ) {
+          queuePostRenderEffect(
+            () => instance.emit('hook:updated'),
+            parentSuspense,
+          )
+        }
+
+        if (__DEV__ || __FEATURE_PROD_DEVTOOLS__) {
+          devtoolsComponentUpdated(instance)
+        }
+
         if (__DEV__) {
           popWarningContext()
         }
       }
-    }, __DEV__ ? createDevEffectOptions(instance) : prodEffectOptions)
+    }
+
+    // create reactive effect for rendering
+    instance.scope.on()
+    const effect = (instance.effect = new ReactiveEffect(componentUpdateFn))
+    instance.scope.off()
+
+    const update = (instance.update = effect.run.bind(effect))
+    const job: SchedulerJob = (instance.job = effect.runIfDirty.bind(effect))
+    job.i = instance
+    job.id = instance.uid
+    effect.scheduler = () => queueJob(job)
+
+    // allowRecurse
+    // #1801, #2043 component render effects should allow recursive updates
+    toggleRecurse(instance, true)
+
+    if (__DEV__) {
+      effect.onTrack = instance.rtc
+        ? e => invokeArrayFns(instance.rtc!, e)
+        : void 0
+      effect.onTrigger = instance.rtg
+        ? e => invokeArrayFns(instance.rtg!, e)
+        : void 0
+    }
+
+    update()
   }
 
   const updateComponentPreRender = (
     instance: ComponentInternalInstance,
     nextVNode: VNode,
-    optimized: boolean
+    optimized: boolean,
   ) => {
     nextVNode.component = instance
     const prevProps = instance.vnode.props
     instance.vnode = nextVNode
     instance.next = null
     updateProps(instance, nextVNode.props, prevProps, optimized)
-    updateSlots(instance, nextVNode.children)
+    updateSlots(instance, nextVNode.children, optimized)
+
+    pauseTracking()
+    // props update may have triggered pre-flush watchers.
+    // flush them before the render update.
+    flushPreFlushCbs(instance)
+    resetTracking()
   }
 
   const patchChildren: PatchChildrenFn = (
@@ -1260,17 +1647,15 @@ function baseCreateRenderer(
     anchor,
     parentComponent,
     parentSuspense,
-    isSVG,
-    optimized = false
+    namespace: ElementNamespace,
+    slotScopeIds,
+    optimized = false,
   ) => {
     const c1 = n1 && n1.children
     const prevShapeFlag = n1 ? n1.shapeFlag : 0
     const c2 = n2.children
 
     const { patchFlag, shapeFlag } = n2
-    if (patchFlag === PatchFlags.BAIL) {
-      optimized = false
-    }
     // fast path
     if (patchFlag > 0) {
       if (patchFlag & PatchFlags.KEYED_FRAGMENT) {
@@ -1283,8 +1668,9 @@ function baseCreateRenderer(
           anchor,
           parentComponent,
           parentSuspense,
-          isSVG,
-          optimized
+          namespace,
+          slotScopeIds,
+          optimized,
         )
         return
       } else if (patchFlag & PatchFlags.UNKEYED_FRAGMENT) {
@@ -1296,8 +1682,9 @@ function baseCreateRenderer(
           anchor,
           parentComponent,
           parentSuspense,
-          isSVG,
-          optimized
+          namespace,
+          slotScopeIds,
+          optimized,
         )
         return
       }
@@ -1324,8 +1711,9 @@ function baseCreateRenderer(
             anchor,
             parentComponent,
             parentSuspense,
-            isSVG,
-            optimized
+            namespace,
+            slotScopeIds,
+            optimized,
           )
         } else {
           // no new children, just unmount old
@@ -1345,8 +1733,9 @@ function baseCreateRenderer(
             anchor,
             parentComponent,
             parentSuspense,
-            isSVG,
-            optimized
+            namespace,
+            slotScopeIds,
+            optimized,
           )
         }
       }
@@ -1360,8 +1749,9 @@ function baseCreateRenderer(
     anchor: RendererNode | null,
     parentComponent: ComponentInternalInstance | null,
     parentSuspense: SuspenseBoundary | null,
-    isSVG: boolean,
-    optimized: boolean
+    namespace: ElementNamespace,
+    slotScopeIds: string[] | null,
+    optimized: boolean,
   ) => {
     c1 = c1 || EMPTY_ARR
     c2 = c2 || EMPTY_ARR
@@ -1380,13 +1770,21 @@ function baseCreateRenderer(
         null,
         parentComponent,
         parentSuspense,
-        isSVG,
-        optimized
+        namespace,
+        slotScopeIds,
+        optimized,
       )
     }
     if (oldLength > newLength) {
       // remove old
-      unmountChildren(c1, parentComponent, parentSuspense, true, commonLength)
+      unmountChildren(
+        c1,
+        parentComponent,
+        parentSuspense,
+        true,
+        false,
+        commonLength,
+      )
     } else {
       // mount new
       mountChildren(
@@ -1395,9 +1793,10 @@ function baseCreateRenderer(
         anchor,
         parentComponent,
         parentSuspense,
-        isSVG,
+        namespace,
+        slotScopeIds,
         optimized,
-        commonLength
+        commonLength,
       )
     }
   }
@@ -1410,8 +1809,9 @@ function baseCreateRenderer(
     parentAnchor: RendererNode | null,
     parentComponent: ComponentInternalInstance | null,
     parentSuspense: SuspenseBoundary | null,
-    isSVG: boolean,
-    optimized: boolean
+    namespace: ElementNamespace,
+    slotScopeIds: string[] | null,
+    optimized: boolean,
   ) => {
     let i = 0
     const l2 = c2.length
@@ -1431,11 +1831,12 @@ function baseCreateRenderer(
           n1,
           n2,
           container,
-          parentAnchor,
+          null,
           parentComponent,
           parentSuspense,
-          isSVG,
-          optimized
+          namespace,
+          slotScopeIds,
+          optimized,
         )
       } else {
         break
@@ -1456,11 +1857,12 @@ function baseCreateRenderer(
           n1,
           n2,
           container,
-          parentAnchor,
+          null,
           parentComponent,
           parentSuspense,
-          isSVG,
-          optimized
+          namespace,
+          slotScopeIds,
+          optimized,
         )
       } else {
         break
@@ -1490,7 +1892,9 @@ function baseCreateRenderer(
             anchor,
             parentComponent,
             parentSuspense,
-            isSVG
+            namespace,
+            slotScopeIds,
+            optimized,
           )
           i++
         }
@@ -1520,7 +1924,7 @@ function baseCreateRenderer(
       const s2 = i // next starting index
 
       // 5.1 build key:index map for newChildren
-      const keyToNewIndexMap: Map<string | number, number> = new Map()
+      const keyToNewIndexMap: Map<PropertyKey, number> = new Map()
       for (i = s2; i <= e2; i++) {
         const nextChild = (c2[i] = optimized
           ? cloneIfMounted(c2[i] as VNode)
@@ -1530,7 +1934,7 @@ function baseCreateRenderer(
             warn(
               `Duplicate keys found during update:`,
               JSON.stringify(nextChild.key),
-              `Make sure keys are unique.`
+              `Make sure keys are unique.`,
             )
           }
           keyToNewIndexMap.set(nextChild.key, i)
@@ -1591,8 +1995,9 @@ function baseCreateRenderer(
             null,
             parentComponent,
             parentSuspense,
-            isSVG,
-            optimized
+            namespace,
+            slotScopeIds,
+            optimized,
           )
           patched++
         }
@@ -1608,8 +2013,12 @@ function baseCreateRenderer(
       for (i = toBePatched - 1; i >= 0; i--) {
         const nextIndex = s2 + i
         const nextChild = c2[nextIndex] as VNode
+        const anchorVNode = c2[nextIndex + 1] as VNode
         const anchor =
-          nextIndex + 1 < l2 ? (c2[nextIndex + 1] as VNode).el : parentAnchor
+          nextIndex + 1 < l2
+            ? // #13559, #14173 fallback to el placeholder for unresolved async component
+              anchorVNode.el || resolveAsyncComponentPlaceholder(anchorVNode)
+            : parentAnchor
         if (newIndexToOldIndexMap[i] === 0) {
           // mount new
           patch(
@@ -1619,7 +2028,9 @@ function baseCreateRenderer(
             anchor,
             parentComponent,
             parentSuspense,
-            isSVG
+            namespace,
+            slotScopeIds,
+            optimized,
           )
         } else if (moved) {
           // move if:
@@ -1640,7 +2051,7 @@ function baseCreateRenderer(
     container,
     anchor,
     moveType,
-    parentSuspense = null
+    parentSuspense = null,
   ) => {
     const { el, type, transition, children, shapeFlag } = vnode
     if (shapeFlag & ShapeFlags.COMPONENT) {
@@ -1667,6 +2078,11 @@ function baseCreateRenderer(
       return
     }
 
+    if (type === Static) {
+      moveStaticNode(vnode, container, anchor)
+      return
+    }
+
     // single nodes
     const needTransition =
       moveType !== MoveType.REORDER &&
@@ -1679,8 +2095,20 @@ function baseCreateRenderer(
         queuePostRenderEffect(() => transition!.enter(el!), parentSuspense)
       } else {
         const { leave, delayLeave, afterLeave } = transition!
-        const remove = () => hostInsert(el!, container, anchor)
+        const remove = () => {
+          if (vnode.ctx!.isUnmounted) {
+            hostRemove(el!)
+          } else {
+            hostInsert(el!, container, anchor)
+          }
+        }
         const performLeave = () => {
+          // #13153 move kept-alive node before v-show transition leave finishes
+          // it needs to call the leaving callback to ensure element's `display`
+          // is `none`
+          if (el!._isLeaving) {
+            el![leaveCbKey](true /* cancelled */)
+          }
           leave(el!, () => {
             remove()
             afterLeave && afterLeave()
@@ -1701,27 +2129,55 @@ function baseCreateRenderer(
     vnode,
     parentComponent,
     parentSuspense,
-    doRemove = false
+    doRemove = false,
+    optimized = false,
   ) => {
-    const { props, ref, children, dynamicChildren, shapeFlag, dirs } = vnode
-    const shouldInvokeDirs = shapeFlag & ShapeFlags.ELEMENT && dirs
-    let vnodeHook: VNodeHook | undefined | null
+    const {
+      type,
+      props,
+      ref,
+      children,
+      dynamicChildren,
+      shapeFlag,
+      patchFlag,
+      dirs,
+      cacheIndex,
+    } = vnode
 
-    // unset ref
-    if (ref != null && parentComponent) {
-      setRef(ref, null, parentComponent, null)
+    if (patchFlag === PatchFlags.BAIL) {
+      optimized = false
     }
 
-    if ((vnodeHook = props && props.onVnodeBeforeUnmount)) {
+    // unset ref
+    if (ref != null) {
+      pauseTracking()
+      setRef(ref, null, parentSuspense, vnode, true)
+      resetTracking()
+    }
+
+    // #6593 should clean memo cache when unmount
+    if (cacheIndex != null) {
+      parentComponent!.renderCache[cacheIndex] = undefined
+    }
+
+    if (shapeFlag & ShapeFlags.COMPONENT_SHOULD_KEEP_ALIVE) {
+      ;(parentComponent!.ctx as KeepAliveContext).deactivate(vnode)
+      return
+    }
+
+    const shouldInvokeDirs = shapeFlag & ShapeFlags.ELEMENT && dirs
+    const shouldInvokeVnodeHook = !isAsyncWrapper(vnode)
+
+    let vnodeHook: VNodeHook | undefined | null
+    if (
+      shouldInvokeVnodeHook &&
+      (vnodeHook = props && props.onVnodeBeforeUnmount)
+    ) {
       invokeVNodeHook(vnodeHook, parentComponent, vnode)
     }
 
     if (shapeFlag & ShapeFlags.COMPONENT) {
-      if (shapeFlag & ShapeFlags.COMPONENT_SHOULD_KEEP_ALIVE) {
-        ;(parentComponent!.ctx as KeepAliveContext).deactivate(vnode)
-      } else {
-        unmountComponent(vnode.component!, parentSuspense, doRemove)
-      }
+      unmountComponent(vnode.component!, parentSuspense, doRemove)
     } else {
       if (__FEATURE_SUSPENSE__ && shapeFlag & ShapeFlags.SUSPENSE) {
         vnode.suspense!.unmount(parentSuspense, doRemove)
@@ -1732,16 +2188,41 @@ function baseCreateRenderer(
         invokeDirectiveHook(vnode, null, parentComponent, 'beforeUnmount')
       }
 
-      if (dynamicChildren) {
-        // fast path for block nodes: only need to unmount dynamic children.
-        unmountChildren(dynamicChildren, parentComponent, parentSuspense)
-      } else if (shapeFlag & ShapeFlags.ARRAY_CHILDREN) {
-        unmountChildren(children as VNode[], parentComponent, parentSuspense)
-      }
-
-      // an unmounted teleport should always remove its children
       if (shapeFlag & ShapeFlags.TELEPORT) {
-        ;(vnode.type as typeof TeleportImpl).remove(vnode, internals)
+        ;(vnode.type as typeof TeleportImpl).remove(
+          vnode,
+          parentComponent,
+          parentSuspense,
+          internals,
+          doRemove,
+        )
+      } else if (
+        dynamicChildren &&
+        // #5154
+        // when v-once is used inside a block, setBlockTracking(-1) marks the
+        // parent block with hasOnce: true
+        // so that it doesn't take the fast path during unmount - otherwise
+        // components nested in v-once are never unmounted.
+        !dynamicChildren.hasOnce &&
+        // #1153: fast path should not be taken for non-stable (v-for) fragments
+        (type !== Fragment ||
+          (patchFlag > 0 && patchFlag & PatchFlags.STABLE_FRAGMENT))
+      ) {
+        // fast path for block nodes: only need to unmount dynamic children.
+        unmountChildren(
+          dynamicChildren,
+          parentComponent,
+          parentSuspense,
+          false,
+          true,
+        )
+      } else if (
+        (type === Fragment &&
+          patchFlag &
+            (PatchFlags.KEYED_FRAGMENT | PatchFlags.UNKEYED_FRAGMENT)) ||
+        (!optimized && shapeFlag & ShapeFlags.ARRAY_CHILDREN)
+      ) {
+        unmountChildren(children as VNode[], parentComponent, parentSuspense)
       }
 
       if (doRemove) {
@@ -1749,7 +2230,11 @@ function baseCreateRenderer(
       }
     }
 
-    if ((vnodeHook = props && props.onVnodeUnmounted) || shouldInvokeDirs) {
+    if (
+      (shouldInvokeVnodeHook &&
+        (vnodeHook = props && props.onVnodeUnmounted)) ||
+      shouldInvokeDirs
+    ) {
       queuePostRenderEffect(() => {
         vnodeHook && invokeVNodeHook(vnodeHook, parentComponent, vnode)
         shouldInvokeDirs &&
@@ -1761,7 +2246,28 @@ function baseCreateRenderer(
   const remove: RemoveFn = vnode => {
     const { type, el, anchor, transition } = vnode
     if (type === Fragment) {
-      removeFragment(el!, anchor!)
+      if (
+        __DEV__ &&
+        vnode.patchFlag > 0 &&
+        vnode.patchFlag & PatchFlags.DEV_ROOT_FRAGMENT &&
+        transition &&
+        !transition.persisted
+      ) {
+        ;(vnode.children as VNode[]).forEach(child => {
+          if (child.type === Comment) {
+            hostRemove(child.el!)
+          } else {
+            remove(child)
+          }
+        })
+      } else {
+        removeFragment(el!, anchor!)
+      }
+      return
+    }
+
+    if (type === Static) {
+      removeStaticNode(vnode)
       return
     }
 
@@ -1804,59 +2310,57 @@ function baseCreateRenderer(
   const unmountComponent = (
     instance: ComponentInternalInstance,
     parentSuspense: SuspenseBoundary | null,
-    doRemove?: boolean
+    doRemove?: boolean,
   ) => {
     if (__DEV__ && instance.type.__hmrId) {
       unregisterHMR(instance)
     }
 
-    const { bum, effects, update, subTree, um, da, isDeactivated } = instance
+    const { bum, scope, job, subTree, um, m, a } = instance
+    invalidateMount(m)
+    invalidateMount(a)
+
     // beforeUnmount hook
     if (bum) {
       invokeArrayFns(bum)
     }
-    if (effects) {
-      for (let i = 0; i < effects.length; i++) {
-        stop(effects[i])
-      }
+
+    if (
+      __COMPAT__ &&
+      isCompatEnabled(DeprecationTypes.INSTANCE_EVENT_HOOKS, instance)
+    ) {
+      instance.emit('hook:beforeDestroy')
     }
-    // update may be null if a component is unmounted before its async
+
+    // stop effects in component scope
+    scope.stop()
+
+    // job may be null if a component is unmounted before its async
     // setup has resolved.
-    if (update) {
-      stop(update)
+    if (job) {
+      // so that scheduler will no longer invoke it
+      job.flags! |= SchedulerJobFlags.DISPOSED
       unmount(subTree, instance, parentSuspense, doRemove)
     }
     // unmounted hook
     if (um) {
       queuePostRenderEffect(um, parentSuspense)
     }
-    // deactivated hook
     if (
-      da &&
-      !isDeactivated &&
-      instance.vnode.shapeFlag & ShapeFlags.COMPONENT_SHOULD_KEEP_ALIVE
+      __COMPAT__ &&
+      isCompatEnabled(DeprecationTypes.INSTANCE_EVENT_HOOKS, instance)
     ) {
-      queuePostRenderEffect(da, parentSuspense)
+      queuePostRenderEffect(
+        () => instance.emit('hook:destroyed'),
+        parentSuspense,
+      )
     }
-    queuePostFlushCb(() => {
+    queuePostRenderEffect(() => {
       instance.isUnmounted = true
-    })
+    }, parentSuspense)
 
-    // A component with async dep inside a pending suspense is unmounted before
-    // its async dep resolves. This should remove the dep from the suspense, and
-    // cause the suspense to resolve immediately if that was the last dep.
-    if (
-      __FEATURE_SUSPENSE__ &&
-      parentSuspense &&
-      !parentSuspense.isResolved &&
-      !parentSuspense.isUnmounted &&
-      instance.asyncDep &&
-      !instance.asyncResolved
-    ) {
-      parentSuspense.deps--
-      if (parentSuspense.deps === 0) {
-        parentSuspense.resolve()
-      }
+    if (__DEV__ || __FEATURE_PROD_DEVTOOLS__) {
+      devtoolsComponentRemoved(instance)
     }
   }
 
@@ -1865,10 +2369,11 @@ function baseCreateRenderer(
     parentComponent,
     parentSuspense,
     doRemove = false,
-    start = 0
+    optimized = false,
+    start = 0,
   ) => {
     for (let i = start; i < children.length; i++) {
-      unmount(children[i], parentComponent, parentSuspense, doRemove)
+      unmount(children[i], parentComponent, parentSuspense, doRemove, optimized)
     }
   }
 
@@ -1879,63 +2384,40 @@ function baseCreateRenderer(
     if (__FEATURE_SUSPENSE__ && vnode.shapeFlag & ShapeFlags.SUSPENSE) {
       return vnode.suspense!.next()
     }
-    return hostNextSibling((vnode.anchor || vnode.el)!)
+    const el = hostNextSibling((vnode.anchor || vnode.el)!)
+    // #9071, #9313
+    // teleported content can mess up nextSibling searches during patch so
+    // we need to skip them during nextSibling search
+    const teleportEnd = el && el[TeleportEndKey]
+    return teleportEnd ? hostNextSibling(teleportEnd) : el
   }
 
-  const setRef = (
-    rawRef: VNodeNormalizedRef,
-    oldRawRef: VNodeNormalizedRef | null,
-    parent: ComponentInternalInstance,
-    value: RendererNode | ComponentPublicInstance | null
-  ) => {
-    const [owner, ref] = rawRef
-    if (__DEV__ && !owner) {
-      warn(
-        `Missing ref owner context. ref cannot be used on hoisted vnodes. ` +
-          `A vnode with ref must be created inside the render function.`
-      )
-      return
-    }
-    const oldRef = oldRawRef && oldRawRef[1]
-    const refs = owner.refs === EMPTY_OBJ ? (owner.refs = {}) : owner.refs
-    const setupState = owner.setupState
-
-    // unset old ref
-    if (oldRef != null && oldRef !== ref) {
-      if (isString(oldRef)) {
-        refs[oldRef] = null
-        if (hasOwn(setupState, oldRef)) {
-          setupState[oldRef] = null
-        }
-      } else if (isRef(oldRef)) {
-        oldRef.value = null
-      }
-    }
-
-    if (isString(ref)) {
-      refs[ref] = value
-      if (hasOwn(setupState, ref)) {
-        setupState[ref] = value
-      }
-    } else if (isRef(ref)) {
-      ref.value = value
-    } else if (isFunction(ref)) {
-      callWithErrorHandling(ref, parent, ErrorCodes.FUNCTION_REF, [value, refs])
-    } else if (__DEV__) {
-      warn('Invalid template ref type:', value, `(${typeof value})`)
-    }
-  }
-
-  const render: RootRenderFunction = (vnode, container) => {
+  let isFlushing = false
+  const render: RootRenderFunction = (vnode, container, namespace) => {
+    let instance
     if (vnode == null) {
       if (container._vnode) {
         unmount(container._vnode, null, null, true)
+        instance = container._vnode.component
       }
     } else {
-      patch(container._vnode || null, vnode, container)
+      patch(
+        container._vnode || null,
+        vnode,
+        container,
+        null,
+        null,
+        null,
+        namespace,
+      )
     }
-    flushPostFlushCbs()
     container._vnode = vnode
+    if (!isFlushing) {
+      isFlushing = true
+      flushPreFlushCbs(instance)
+      flushPostFlushCbs()
+      isFlushing = false
+    }
   }
 
   const internals: RendererInternals = {
@@ -1948,35 +2430,118 @@ function baseCreateRenderer(
     pc: patchChildren,
     pbc: patchBlockChildren,
     n: getNextHostNode,
-    o: options
+    o: options,
   }
 
   let hydrate: ReturnType<typeof createHydrationFunctions>[0] | undefined
   let hydrateNode: ReturnType<typeof createHydrationFunctions>[1] | undefined
   if (createHydrationFns) {
-    ;[hydrate, hydrateNode] = createHydrationFns(internals as RendererInternals<
-      Node,
-      Element
-    >)
+    ;[hydrate, hydrateNode] = createHydrationFns(
+      internals as RendererInternals<Node, Element>,
+    )
   }
 
   return {
     render,
     hydrate,
-    createApp: createAppAPI(render, hydrate)
+    createApp: createAppAPI(render, hydrate),
   }
 }
 
-export function invokeVNodeHook(
-  hook: VNodeHook,
-  instance: ComponentInternalInstance | null,
-  vnode: VNode,
-  prevVNode: VNode | null = null
+function resolveChildrenNamespace(
+  { type, props }: VNode,
+  currentNamespace: ElementNamespace,
+): ElementNamespace {
+  return (currentNamespace === 'svg' && type === 'foreignObject') ||
+    (currentNamespace === 'mathml' &&
+      type === 'annotation-xml' &&
+      props &&
+      props.encoding &&
+      props.encoding.includes('html'))
+    ? undefined
+    : currentNamespace
+}
+
+function toggleRecurse(
+  { effect, job }: ComponentInternalInstance,
+  allowed: boolean,
 ) {
-  callWithAsyncErrorHandling(hook, instance, ErrorCodes.VNODE_HOOK, [
-    vnode,
-    prevVNode
-  ])
+  if (allowed) {
+    effect.flags |= EffectFlags.ALLOW_RECURSE
+    job.flags! |= SchedulerJobFlags.ALLOW_RECURSE
+  } else {
+    effect.flags &= ~EffectFlags.ALLOW_RECURSE
+    job.flags! &= ~SchedulerJobFlags.ALLOW_RECURSE
+  }
+}
+
+export function needTransition(
+  parentSuspense: SuspenseBoundary | null,
+  transition: TransitionHooks | null,
+): boolean | null {
+  return (
+    (!parentSuspense || (parentSuspense && !parentSuspense.pendingBranch)) &&
+    transition &&
+    !transition.persisted
+  )
+}
+
+/**
+ * #1156
+ * When a component is HMR-enabled, we need to make sure that all static nodes
+ * inside a block also inherit the DOM element from the previous tree so that
+ * HMR updates (which are full updates) can retrieve the element for patching.
+ *
+ * #2080
+ * Inside keyed `template` fragment static children, if a fragment is moved,
+ * the children will always be moved. Therefore, in order to ensure correct move
+ * position, el should be inherited from previous nodes.
+ */
+export function traverseStaticChildren(
+  n1: VNode,
+  n2: VNode,
+  shallow = false,
+): void {
+  const ch1 = n1.children
+  const ch2 = n2.children
+  if (isArray(ch1) && isArray(ch2)) {
+    for (let i = 0; i < ch1.length; i++) {
+      // this is only called in the optimized path so array children are
+      // guaranteed to be vnodes
+      const c1 = ch1[i] as VNode
+      let c2 = ch2[i] as VNode
+      if (c2.shapeFlag & ShapeFlags.ELEMENT && !c2.dynamicChildren) {
+        if (c2.patchFlag <= 0 || c2.patchFlag === PatchFlags.NEED_HYDRATION) {
+          c2 = ch2[i] = cloneIfMounted(ch2[i] as VNode)
+          c2.el = c1.el
+        }
+        if (!shallow && c2.patchFlag !== PatchFlags.BAIL)
+          traverseStaticChildren(c1, c2)
+      }
+      // #6852 also inherit for text nodes
+      if (c2.type === Text) {
+        // avoid cached text nodes retaining detached dom nodes
+        if (c2.patchFlag !== PatchFlags.CACHED) {
+          c2.el = c1.el
+        } else {
+          // cache the child index for HMR updates
+          ;(c2 as any).__elIndex =
+            i +
+            // take fragment start anchor into account
+            (n1.type === Fragment ? 1 : 0)
+        }
+      }
+      // #2324 also inherit for comment nodes, but not placeholders (e.g. v-if which
+      // would have received .el during block patch)
+      if (c2.type === Comment && !c2.el) {
+        c2.el = c1.el
+      }
+
+      if (__DEV__) {
+        c2.el && (c2.el.__vnode = c2)
+      }
+    }
+  }
 }
 
 // https://en.wikipedia.org/wiki/Longest_increasing_subsequence
@@ -1997,7 +2562,7 @@ function getSequence(arr: number[]): number[] {
       u = 0
       v = result.length - 1
       while (u < v) {
-        c = ((u + v) / 2) | 0
+        c = (u + v) >> 1
         if (arr[result[c]] < arrI) {
           u = c + 1
         } else {
@@ -2019,4 +2584,38 @@ function getSequence(arr: number[]): number[] {
     v = p[v]
   }
   return result
+}
+
+function locateNonHydratedAsyncRoot(
+  instance: ComponentInternalInstance,
+): ComponentInternalInstance | undefined {
+  const subComponent = instance.subTree.component
+  if (subComponent) {
+    if (subComponent.asyncDep && !subComponent.asyncResolved) {
+      return subComponent
+    } else {
+      return locateNonHydratedAsyncRoot(subComponent)
+    }
+  }
+}
+
+export function invalidateMount(hooks: LifecycleHook): void {
+  if (hooks) {
+    for (let i = 0; i < hooks.length; i++)
+      hooks[i].flags! |= SchedulerJobFlags.DISPOSED
+  }
+}
+
+function resolveAsyncComponentPlaceholder(anchorVnode: VNode) {
+  if (anchorVnode.placeholder) {
+    return anchorVnode.placeholder
+  }
+
+  // anchor vnode maybe is a wrapper component has single unresolved async component
+  const instance = anchorVnode.component
+  if (instance) {
+    return resolveAsyncComponentPlaceholder(instance.subTree)
+  }
+
+  return null
 }
